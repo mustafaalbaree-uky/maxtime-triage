@@ -127,7 +127,7 @@
 
 <script>
 "use strict";
-const BUILD = "v1.1.0, built 2026-08-24";
+const BUILD = "v1.2.0, built 2026-08-24";
 document.getElementById("stamp").textContent =
   "MaxTime Timing Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -226,8 +226,42 @@ async function readWorkbook(buf) {
 }
 
 /* ---------- parsing: mirrors tools/triage_lib.py exactly ---------- */
-const FILE_ID_RE = /^(\d{3})_(\d{4})(?=\D|$)/;
+const ID_TOKEN_RE = /(?<![0-9A-Za-z])(\d{4})(?![0-9])/g;
+const STANDARD_RE = /^\d{3}_\d{4}_\S/;
+const LEADING_COUNTY_RE = /^(?:new)?(\d{3})[ _-]/;
+const IGNORE_EXTS = new Set(["xlsx", "xls", "csv", "pdf", "ini", "lnk", "url",
+  "zip", "docx", "doc", "png", "jpg", "jpeg", "gif", "txt"]);
+const KEY_EXTS = new Set(["key"]);
+const SPECIAL_RE = /ICWS|AWF|FLUSH|ITS[ _]?PLUS|\bEVENT\b/i;
 const S = v => String(v == null ? "" : v).trim();
+
+function extOf(name) {
+  const base = name.split("/").pop();
+  if (base.includes(".") && !base.startsWith("."))
+    return base.split(".").pop().toLowerCase();
+  return "";
+}
+
+function classifyFile(name, validIds) {
+  const base = S(name).replace(/\\/g, "/").split("/").pop();
+  const out = { name: base, id: null, county_prefix: null,
+    kind: "ignore", standard: false };
+  if (!base || base.startsWith(".") || base.toLowerCase() === "desktop.ini")
+    return out;
+  const ext = extOf(base);
+  if (IGNORE_EXTS.has(ext) || base.toLowerCase().startsWith("0000_d7")) return out;
+
+  const ids = (base.match(ID_TOKEN_RE) || []).filter(t => validIds.has(t));
+  out.id = ids.length ? ids[0] : null;
+  const m = LEADING_COUNTY_RE.exec(base);
+  if (m) out.county_prefix = m[1];
+
+  if (KEY_EXTS.has(ext)) out.kind = "key";
+  else if (SPECIAL_RE.test(base)) out.kind = "special";
+  else if (out.id === null) out.kind = "unmatched";
+  else { out.kind = "timing"; out.standard = STANDARD_RE.test(base); }
+  return out;
+}
 
 function findCol(header, needles, exact) {
   for (const [col, text] of Object.entries(header)) {
@@ -283,43 +317,56 @@ function classifyStatus(text) {
   return "todo";
 }
 
-function parseListing(filenames) {
-  const files = [], unparsed = [];
-  for (const raw of filenames) {
-    const name = S(raw).replace(/\\/g, "/").split("/").pop();
-    if (!name) continue;
-    const m = FILE_ID_RE.exec(name);
-    if (m) files.push({ name, county_code: m[1], id: m[2] });
-    else unparsed.push(name);
-  }
-  return [files, unparsed];
+function parseListing(filenames, validIds) {
+  return filenames.filter(n => S(n)).map(n => classifyFile(n, validIds));
 }
 
 const idCmp = (a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+const byName = (a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 
 function analyze(links, master, filenames) {
-  const [files, unparsed] = parseListing(filenames);
-  const byId = {};
-  for (const f of files) (byId[f.id] = byId[f.id] || []).push(f);
-  const covered = new Set(Object.keys(byId));
+  const validIds = new Set();
+  for (const i of Object.keys(links)) if (/^\d{4}$/.test(i)) validIds.add(i);
+  for (const m of master) if (/^\d{4}$/.test(m.id)) validIds.add(m.id);
 
-  const masterById = {}, masterDupIds = new Set();
-  for (const m of master) {
-    if (masterById[m.id]) masterDupIds.add(m.id); else masterById[m.id] = m;
+  const files = parseListing(filenames, validIds);
+
+  const timingById = {}, filesById = {};
+  let keyCount = 0, ignoredCount = 0;
+  for (const f of files) {
+    if (f.kind === "ignore") { ignoredCount++; continue; }
+    if (f.kind === "key") keyCount++;
+    if (f.id) {
+      (filesById[f.id] = filesById[f.id] || []).push(f);
+      if (f.kind === "timing") (timingById[f.id] = timingById[f.id] || []).push(f);
+    }
   }
+  const covered = new Set(Object.keys(timingById));
+  const related = sid => (filesById[sid] || [])
+    .filter(f => f.kind !== "timing").map(f => ({ name: f.name, kind: f.kind }));
+
+  const masterById = {}, masterRowsById = {};
+  for (const m of master) {
+    (masterRowsById[m.id] = masterRowsById[m.id] || []).push(m);
+    if (!(m.id in masterById)) masterById[m.id] = m;
+  }
+  const master_dup_ids = Object.keys(masterRowsById)
+    .filter(id => masterRowsById[id].length > 1).sort(idCmp)
+    .map(id => ({ id, rows: masterRowsById[id].map(r => ({ row: r.row,
+      county: r.county, s1: r.s1, s2: r.s2, status: r.status })) }));
 
   const needs_download = [];
   for (const sid of Object.keys(links).sort(idCmp)) {
     if (!covered.has(sid)) {
       const mm = masterById[sid];
       needs_download.push({ ...links[sid], id: sid,
-        master_row: mm ? mm.row : null });
+        master_row: mm ? mm.row : null, related_files: related(sid) });
     }
   }
 
-  const duplicates = Object.keys(byId).sort()
-    .filter(sid => byId[sid].length > 1)
-    .map(sid => ({ id: sid, files: byId[sid].map(x => x.name).sort() }));
+  const duplicates = Object.keys(timingById).sort()
+    .filter(sid => timingById[sid].length > 1)
+    .map(sid => ({ id: sid, files: timingById[sid].map(x => x.name).sort() }));
 
   const mark_timing = [];
   for (const sid of [...covered].sort(idCmp)) {
@@ -329,37 +376,44 @@ function analyze(links, master, filenames) {
         s1: m.s1, s2: m.s2, status: m.status });
   }
 
-  const county_mismatch = [];
-  for (const sid of Object.keys(byId).sort()) {
-    const m = masterById[sid];
-    if (!m || !/^\d+$/.test(m.county_id)) continue;
-    const expect = m.county_id.padStart(3, "0");
-    for (const f of byId[sid])
-      if (f.county_code !== expect)
-        county_mismatch.push({ file: f.name, file_county: f.county_code,
-          master_county: expect, id: sid });
+  const nonstandard_naming = [], county_mismatch = [];
+  for (const f of files) {
+    if (f.kind !== "timing") continue;
+    if (!f.standard) nonstandard_naming.push({ name: f.name, id: f.id });
+    const m = masterById[f.id];
+    if (f.county_prefix && m && /^\d+$/.test(m.county_id)) {
+      const expect = m.county_id.padStart(3, "0");
+      if (f.county_prefix !== expect)
+        county_mismatch.push({ file: f.name, file_county: f.county_prefix,
+          master_county: expect, id: f.id });
+    }
   }
 
-  const file_id_unknown = files
-    .filter(f => !(f.id in links) && !(f.id in masterById))
+  const special_files = files.filter(f => f.kind === "special")
+    .map(f => ({ name: f.name, id: f.id })).sort(byName);
+  const unmatched_files = files.filter(f => f.kind === "unmatched")
     .map(f => f.name).sort();
-  const links_not_in_master =
-    Object.keys(links).filter(s => !(s in masterById)).sort(idCmp);
+
+  const links_not_in_master = Object.keys(links).sort(idCmp)
+    .filter(s => !(s in masterById))
+    .map(s => ({ id: s, county: links[s].county,
+      main: links[s].main, side: links[s].side }));
   const master_not_in_links =
     Object.keys(masterById).filter(s => !(s in links)).sort(idCmp);
-  const says_done_no_file = Object.keys(links)
+  const says_done_no_file = Object.keys(links).sort(idCmp)
     .filter(s => !covered.has(s) && masterById[s] &&
-      classifyStatus(masterById[s].status) === "done").sort(idCmp);
+      classifyStatus(masterById[s].status) === "done")
+    .map(s => ({ id: s, related_files: related(s) }));
 
   return {
     needs_download, duplicates, mark_timing,
     anomalies: {
-      unparsed_filenames: unparsed.slice().sort(), file_id_unknown,
-      county_mismatch, links_not_in_master,
-      master_dup_ids: [...masterDupIds].sort(), says_done_no_file,
+      nonstandard_naming, special_files, unmatched_files, county_mismatch,
+      links_not_in_master, master_dup_ids, says_done_no_file,
     },
     info: { master_not_in_links, covered_count: covered.size,
-      file_count: files.length },
+      timing_file_count: Object.values(timingById).reduce((a, v) => a + v.length, 0),
+      key_file_count: keyCount, ignored_count: ignoredCount },
   };
 }
 
@@ -540,9 +594,10 @@ function refresh() {
 }
 
 function anomalyCount(a) {
-  return a.unparsed_filenames.length + a.file_id_unknown.length +
-    a.county_mismatch.length + a.links_not_in_master.length +
-    a.master_dup_ids.length + a.says_done_no_file.length;
+  return a.nonstandard_naming.length + a.special_files.length +
+    a.unmatched_files.length + a.county_mismatch.length +
+    a.links_not_in_master.length + a.master_dup_ids.length +
+    a.says_done_no_file.length;
 }
 
 function renderSummary() {
@@ -557,7 +612,7 @@ function renderSummary() {
     ["anom", anomalyCount(r.anomalies), "anomalies", "n-warn", "worth a look"],
     ["cov", (Object.keys(state.links).length - r.needs_download.length) +
       " / " + Object.keys(state.links).length,
-      "covered", "n-ok", r.info.file_count + " files in folder"],
+      "covered", "n-ok", r.info.timing_file_count + " timing files"],
   ];
   document.getElementById("summary").innerHTML = defs.map(([id, n, label, cls, sub]) =>
     `<div class="stat ${state.tab === id ? "active" : ""}" data-tab="${id}">
@@ -584,16 +639,22 @@ function renderPanel() {
       </div>
       <table><thead><tr><th></th><th>ID</th><th>County</th><th>Intersection</th>
       <th>Controller</th><th>Master row</th></tr></thead><tbody>` +
-      r.needs_download.map(e => `
+      r.needs_download.map(e => {
+        const hint = (e.related_files && e.related_files.length)
+          ? `<div style="color:var(--warn);font-size:12px;margin-top:3px">
+             found a non timing file for this ID, check by hand: ` +
+            e.related_files.map(f => `${h(f.name)} (${h(f.kind)})`).join(", ") + `</div>`
+          : "";
+        return `
         <tr class="${state.done[e.id] ? "done" : ""}">
           <td><input type="checkbox" data-id="${h(e.id)}"
             ${state.done[e.id] ? "checked" : ""}></td>
           <td><span class="chip">${h(e.id)}</span></td>
           <td>${h(e.county)}</td>
-          <td>${h(e.main)} @ ${h(e.side)}</td>
+          <td>${h(e.main)} @ ${h(e.side)}${hint}</td>
           <td>${e.url ? `<a href="${h(e.url)}" target="_blank" rel="noopener">${h(e.ip)}:${h(e.port)}</a>` : "no link"}</td>
           <td>${e.master_row == null ? "not in master" : "row " + e.master_row}</td>
-        </tr>`).join("") + "</tbody></table>";
+        </tr>`; }).join("") + "</tbody></table>";
     for (const cb of p.querySelectorAll("input[type=checkbox]"))
       cb.onchange = () => {
         if (cb.checked) state.done[cb.dataset.id] = new Date().toISOString();
@@ -653,22 +714,39 @@ function renderPanel() {
       <div class="card" style="font:12px ui-monospace,Consolas,monospace;
         max-height:220px;overflow:auto">${items.map(h).join("<br>")}</div></div>` : "";
     p.innerHTML =
-      section("Files whose ID is in neither sheet",
-        "The 4 digit ID parsed from these filenames matches nothing.",
-        a.file_id_unknown) +
+      section("Sheet says timing is done but no timing file exists",
+        "The master timing column reads as done, yet no timing database is in "
+        + "the folder. Any non timing file sharing the ID is shown so you can "
+        + "check whether it was misnamed.",
+        a.says_done_no_file.map(s => s.id +
+          (s.related_files.length
+            ? " (found: " + s.related_files.map(f => f.name + " [" + f.kind + "]").join(", ") + ")"
+            : ""))) +
+      section("Nonstandard file names, matched by ID but worth retitling",
+        "These were matched to a signal by their ID even though the name has a "
+        + "stray space, a dash, a missing county code, or a new prefix. The "
+        + "standard is CCC_IDID_name.",
+        a.nonstandard_naming.map(n => n.id + "  ->  " + n.name)) +
       section("County prefix disagrees with the master sheet",
         "The 3 digit prefix should match the master CountyID.",
         a.county_mismatch.map(c =>
           `${c.file} (file says ${c.file_county}, master says ${c.master_county})`)) +
-      section("Sheet says timing is done but no file exists",
-        "The master timing column reads as done, yet the folder has no file.",
-        a.says_done_no_file) +
-      section("Filenames that do not follow the naming pattern",
-        "Expected CCC_IDID_name. These were skipped.", a.unparsed_filenames) +
+      section("Subsystem files (ICWS, AWF, ITS), not intersection timing",
+        "Shown for awareness. These are separate systems and do not count as "
+        + "timing coverage.",
+        a.special_files.map(s => s.name + (s.id ? "  (id " + s.id + ")" : ""))) +
+      section("Files with no recognizable signal ID",
+        "No known 4 digit signal ID was found in these names.", a.unmatched_files) +
       section("Linked signals missing from the master sheet",
-        "IDs with a MaxTime link but no master row.", a.links_not_in_master) +
+        "IDs with a MaxTime link but no master row. Check whether the master "
+        + "already has this intersection with the ID left blank before adding a row.",
+        a.links_not_in_master.map(x =>
+          x.id + "  " + (x.county || "") + "  " + (x.main || "") + " @ " + (x.side || ""))) +
       section("Duplicate ID rows inside the master sheet",
-        "The same ID appears on more than one master row.", a.master_dup_ids) ||
+        "The same ID appears on more than one master row. Compare them and keep one.",
+        a.master_dup_ids.map(d => d.id + ":  " +
+          d.rows.map(r => "row " + r.row + " " + (r.s1 || "") + "@" + (r.s2 || "")
+            + (r.status ? " [" + r.status + "]" : "")).join("   |   "))) ||
       `<div class="empty">No anomalies.</div>`;
     if (!anomalyCount(a)) p.innerHTML = `<div class="empty">No anomalies.</div>`;
   } else if (state.tab === "cov") {
@@ -676,7 +754,9 @@ function renderPanel() {
       <div class="anom"><h3>Coverage</h3>
       <p class="exp">${Object.keys(state.links).length - result.needs_download.length} of
       ${Object.keys(state.links).length} MaxTime signals have at least one
-      timing file. The folder holds ${result.info.file_count} parseable files.
+      timing file. The folder holds ${result.info.timing_file_count} timing
+      files, ${result.info.key_file_count} key files, and
+      ${result.info.ignored_count} other files that were ignored.
       ${result.info.master_not_in_links.length} master IDs have no MaxTime
       link at all (mostly Lexington signals); they are outside this task.</p>
       <div class="card" style="font:12px ui-monospace,Consolas,monospace;
@@ -698,27 +778,35 @@ function loadDemo() {
     mk("7012", "CEDAR", "US 42", "RIVER RD", "198.51.100.22"),
     mk("7014", "CEDAR", "SR 55", "PARK LOOP", "198.51.100.23"),
     mk("7016", "CEDAR", "SR 55", "FAIRGROUNDS", "198.51.100.24"),
+    mk("7020", "CEDAR", "US 10", "NEW RD", "198.51.100.25"),
   ]);
   state.master = [
     { row: 2, id: "7000", county: "MAPLE", county_id: "12", s1: "US 10", s2: "OAK ST", status: "yes" },
-    { row: 3, id: "7002", county: "MAPLE", county_id: "12", s1: "US 10", s2: "ELM AVE", status: "" },
-    { row: 4, id: "7004", county: "MAPLE", county_id: "12", s1: "SR 90", s2: "SCHOOL DR", status: "timing 2025" },
-    { row: 5, id: "7006", county: "MAPLE", county_id: "12", s1: "SR 90", s2: "DEPOT ST", status: "" },
-    { row: 6, id: "7010", county: "CEDAR", county_id: "34", s1: "US 42", s2: "MILL RD", status: "" },
-    { row: 7, id: "7012", county: "CEDAR", county_id: "34", s1: "US 42", s2: "RIVER RD", status: "yes" },
-    { row: 8, id: "7014", county: "CEDAR", county_id: "34", s1: "SR 55", s2: "PARK LOOP", status: "na" },
-    { row: 9, id: "7016", county: "CEDAR", county_id: "34", s1: "SR 55", s2: "FAIRGROUNDS", status: "" },
-    { row: 10, id: "7018", county: "CEDAR", county_id: "34", s1: "SR 55", s2: "OLD KILN RD", status: "" },
+    { row: 3, id: "7000", county: "MAPLE", county_id: "12", s1: "US 10", s2: "OAK STREET", status: "" },
+    { row: 4, id: "7002", county: "MAPLE", county_id: "12", s1: "US 10", s2: "ELM AVE", status: "" },
+    { row: 5, id: "7004", county: "MAPLE", county_id: "12", s1: "SR 90", s2: "SCHOOL DR", status: "timing 2025" },
+    { row: 6, id: "7006", county: "MAPLE", county_id: "12", s1: "SR 90", s2: "DEPOT ST", status: "" },
+    { row: 7, id: "7010", county: "CEDAR", county_id: "34", s1: "US 42", s2: "MILL RD", status: "" },
+    { row: 8, id: "7012", county: "CEDAR", county_id: "34", s1: "US 42", s2: "RIVER RD", status: "yes" },
+    { row: 9, id: "7014", county: "CEDAR", county_id: "34", s1: "SR 55", s2: "PARK LOOP", status: "na" },
+    { row: 10, id: "7016", county: "CEDAR", county_id: "34", s1: "SR 55", s2: "FAIRGROUNDS", status: "" },
+    { row: 11, id: "7018", county: "CEDAR", county_id: "34", s1: "SR 55", s2: "OLD KILN RD", status: "" },
   ];
   state.listing = [
-    "012_7000_US10@OAK_ST.db",
-    "012_7002_US10@ELM_AVE.db",
-    "012_7002_US10@ELM_AVE_OLD.db",
-    "012_7004_KY90@SCHOOL_DR.db",
-    "034_7010_US42@MILL_RD.db",
-    "099_7014_KY55@PARK_LOOP.db",
-    "034_8888_MYSTERY_SIGNAL.db",
-    "folder notes.txt",
+    "012_7000_US10@OAK_ST",              // standard, covered
+    "012_7002_US10@ELM_AVE",             // duplicate id
+    "012_7002_US10@ELM_AVE_OLD",         // duplicate id
+    "012_7004_SR90@SCHOOL_DR",           // standard, covered
+    "012_ 7006_SR90@DEPOT_ST",           // stray space, matched by id
+    "034-7010_US42@MILL_RD",             // dash separator, matched by id
+    "7012-US42@RIVER_RD.key",            // key file only, no timing db
+    "099_7014_SR55@PARK_LOOP",           // wrong county prefix
+    "034_ 7016_SR55@FAIRGROUNDS_AWF_Flush",  // subsystem file, not timing
+    "new012_7020_US10@NEW_RD",           // new prefix, matched by id
+    "034_8888_MYSTERY_SIGNAL",           // unknown id
+    "067-0000_SR57@SR1970_ICWS",         // subsystem file, invalid id
+    "0000_D7_MaxTime Links.xlsx",        // ignored
+    "desktop.ini",                       // ignored
   ];
   state.listingLabel = "demo data";
   toast("Demo data loaded. Nothing here is real.");

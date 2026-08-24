@@ -22,7 +22,14 @@ status column was all done by eye.
 **`webapp/index.html`** is the whole tool: one self contained HTML file with
 no dependencies, no build step, and no network access. Drop in the two Excel
 sheets and the folder listing (a synced folder, a SharePoint CSV export, or a
-pasted list) and it computes:
+pasted list) and it computes the results below.
+
+Files are matched to signals by the 4 digit signal ID alone, not by a rigid
+name pattern, because the folder is filled by hand and the names are
+inconsistent: some use a dash instead of an underscore, some carry a stray
+space, some drop the county code, some are key files or subsystem exports
+rather than timing databases. Matching on the ID recovers those while a
+separate list flags the ones whose names should be standardized.
 
 - **Needs download**: every MaxTime signal without a timing file, each with a
   clickable link straight to its controller, a persistent checkbox for
@@ -31,9 +38,13 @@ pasted list) and it computes:
   note text for the sheet.
 - **Mark timing**: signals whose file exists but whose master sheet row does
   not say so yet, with the exact row number to update.
-- **Anomalies**: files matching no known signal, county prefixes that
-  contradict the master sheet, duplicate rows inside the master sheet, and
-  rows claiming a file that does not exist.
+- **Anomalies**: nonstandard file names worth retitling, county prefixes that
+  contradict the master sheet, subsystem files (ICWS, AWF) that are not timing
+  databases, files matching no known signal, signals linked but missing from
+  the master sheet (with their intersection, to check before adding a row),
+  duplicate rows inside the master sheet, and rows claiming a timing file that
+  does not exist (with any non timing file that shares the ID, so a misnamed
+  file is easy to spot).
 
 ![Anomaly view with synthetic demo data](docs/demo_anomalies.png)
 

@@ -135,38 +135,105 @@ def classify_status(text):
     return "todo"
 
 
-def parse_listing(filenames):
-    """filenames -> (files list, unparsed list).
+# A 4 digit signal ID appears delimited by a separator, never glued to a
+# letter (which would be a route number like KY1267) or another digit.
+ID_TOKEN_RE = re.compile(r"(?<![0-9A-Za-z])(\d{4})(?![0-9])")
+# Standard SharePoint name: county, underscore, id, underscore, then the rest,
+# with no stray space. Anything matching an ID but not this is nonstandard.
+STANDARD_RE = re.compile(r"^\d{3}_\d{4}_\S")
+LEADING_COUNTY_RE = re.compile(r"^(?:new)?(\d{3})[ _-]")
+# Non timing extensions and system files to ignore outright.
+IGNORE_EXTS = {"xlsx", "xls", "csv", "pdf", "ini", "lnk", "url", "zip",
+               "docx", "doc", "png", "jpg", "jpeg", "gif", "txt"}
+# A .key file is a controller key file, not a timing database.
+KEY_EXTS = {"key"}
+# Markers of a separate subsystem database (not intersection timing).
+SPECIAL_RE = re.compile(r"ICWS|AWF|FLUSH|ITS[ _]?PLUS|\bEVENT\b", re.I)
 
-    files: {name, county_code, id}. Extensions and folder paths are ignored.
+
+def _ext(name):
+    base = name.rsplit("/", 1)[-1]
+    if "." in base and not base.startswith("."):
+        return base.rsplit(".", 1)[-1].lower()
+    return ""
+
+
+def classify_file(name, valid_ids):
+    """Classify one filename and pull out its signal ID if known.
+
+    kind is one of: ignore, key, special, timing, unmatched.
+    Only 'timing' files count as timing coverage. 'key' and 'special' files
+    are shown for context but never counted. Matching is by the 4 digit ID
+    against the set of known signals, because SharePoint names are hand typed
+    and their prefixes, separators, and spacing are inconsistent.
     """
-    files, unparsed = [], []
-    for raw in filenames:
-        name = str(raw).strip().replace("\\", "/").split("/")[-1]
-        if not name:
-            continue
-        m = FILE_ID_RE.match(name)
-        if m:
-            files.append({"name": name, "county_code": m.group(1), "id": m.group(2)})
-        else:
-            unparsed.append(name)
-    return files, unparsed
+    base = str(name).strip().replace("\\", "/").split("/")[-1]
+    result = {"name": base, "id": None, "county_prefix": None,
+              "kind": "ignore", "standard": False}
+    if not base or base.startswith(".") or base.lower() == "desktop.ini":
+        return result
+    ext = _ext(base)
+    if ext in IGNORE_EXTS or base.lower().startswith("0000_d7"):
+        return result
+
+    ids = [t for t in ID_TOKEN_RE.findall(base) if t in valid_ids]
+    result["id"] = ids[0] if ids else None
+    m = LEADING_COUNTY_RE.match(base)
+    if m:
+        result["county_prefix"] = m.group(1)
+
+    if ext in KEY_EXTS:
+        result["kind"] = "key"
+    elif SPECIAL_RE.search(base):
+        result["kind"] = "special"
+    elif result["id"] is None:
+        result["kind"] = "unmatched"
+    else:
+        result["kind"] = "timing"
+        result["standard"] = bool(STANDARD_RE.match(base))
+    return result
+
+
+def parse_listing(filenames, valid_ids):
+    return [classify_file(n, valid_ids) for n in filenames if str(n).strip()]
 
 
 def analyze(links, master, filenames):
-    files, unparsed = parse_listing(filenames)
-    by_id = {}
-    for f in files:
-        by_id.setdefault(f["id"], []).append(f)
-    covered = set(by_id)
+    valid_ids = {i for i in links if i.isdigit() and len(i) == 4}
+    valid_ids |= {m["id"] for m in master if m["id"].isdigit() and len(m["id"]) == 4}
 
-    master_by_id = {}
-    master_dup_ids = set()
+    files = parse_listing(filenames, valid_ids)
+
+    timing_by_id, files_by_id = {}, {}
+    key_count = ignored_count = 0
+    for f in files:
+        if f["kind"] == "ignore":
+            ignored_count += 1
+            continue
+        if f["kind"] == "key":
+            key_count += 1
+        if f["id"]:
+            files_by_id.setdefault(f["id"], []).append(f)
+            if f["kind"] == "timing":
+                timing_by_id.setdefault(f["id"], []).append(f)
+    covered = set(timing_by_id)
+
+    def related(sid):
+        return [{"name": f["name"], "kind": f["kind"]}
+                for f in files_by_id.get(sid, []) if f["kind"] != "timing"]
+
+    master_by_id, master_rows_by_id = {}, {}
     for m in master:
-        if m["id"] in master_by_id:
-            master_dup_ids.add(m["id"])
-        else:
+        master_rows_by_id.setdefault(m["id"], []).append(m)
+        if m["id"] not in master_by_id:
             master_by_id[m["id"]] = m
+    master_dup_ids = sorted(
+        [{"id": sid,
+          "rows": [{"row": r["row"], "county": r["county"],
+                    "s1": r["s1"], "s2": r["s2"], "status": r["status"]}
+                   for r in rows]}
+         for sid, rows in master_rows_by_id.items() if len(rows) > 1],
+        key=lambda d: (len(d["id"]), d["id"]))
 
     needs_download = []
     for sid in sorted(links, key=lambda s: (len(s), s)):
@@ -175,11 +242,12 @@ def analyze(links, master, filenames):
             e["id"] = sid
             mm = master_by_id.get(sid)
             e["master_row"] = mm["row"] if mm else None
+            e["related_files"] = related(sid)
             needs_download.append(e)
 
     duplicates = [
         {"id": sid, "files": sorted(x["name"] for x in v)}
-        for sid, v in sorted(by_id.items()) if len(v) > 1
+        for sid, v in sorted(timing_by_id.items()) if len(v) > 1
     ]
 
     mark_timing = []
@@ -191,51 +259,55 @@ def analyze(links, master, filenames):
                 "s1": m["s1"], "s2": m["s2"], "status": m["status"],
             })
 
-    county_mismatch = []
-    for sid, group in sorted(by_id.items()):
-        m = master_by_id.get(sid)
-        if not m or not m["county_id"].isdigit():
+    nonstandard_naming, county_mismatch = [], []
+    for f in files:
+        if f["kind"] != "timing":
             continue
-        expect = "%03d" % int(m["county_id"])
-        for f in group:
-            if f["county_code"] != expect:
+        if not f["standard"]:
+            nonstandard_naming.append({"name": f["name"], "id": f["id"]})
+        m = master_by_id.get(f["id"])
+        if f["county_prefix"] and m and m["county_id"].isdigit():
+            expect = "%03d" % int(m["county_id"])
+            if f["county_prefix"] != expect:
                 county_mismatch.append({
-                    "file": f["name"], "file_county": f["county_code"],
-                    "master_county": expect, "id": sid,
-                })
+                    "file": f["name"], "file_county": f["county_prefix"],
+                    "master_county": expect, "id": f["id"]})
 
-    file_id_unknown = sorted(
-        f["name"] for f in files
-        if f["id"] not in links and f["id"] not in master_by_id
-    )
-    links_not_in_master = sorted(
-        (s for s in links if s not in master_by_id), key=lambda s: (len(s), s)
-    )
+    special_files = sorted(
+        [{"name": f["name"], "id": f["id"]} for f in files if f["kind"] == "special"],
+        key=lambda d: d["name"])
+    unmatched_files = sorted(f["name"] for f in files if f["kind"] == "unmatched")
+
+    links_not_in_master = [
+        {"id": s, "county": links[s]["county"],
+         "main": links[s]["main"], "side": links[s]["side"]}
+        for s in sorted(links, key=lambda s: (len(s), s)) if s not in master_by_id]
     master_not_in_links = sorted(
-        (s for s in master_by_id if s not in links), key=lambda s: (len(s), s)
-    )
-    says_done_no_file = sorted(
-        (s for s in links
-         if s not in covered and s in master_by_id
-         and classify_status(master_by_id[s]["status"]) == "done"),
-        key=lambda s: (len(s), s),
-    )
+        (s for s in master_by_id if s not in links), key=lambda s: (len(s), s))
+    says_done_no_file = [
+        {"id": s, "related_files": related(s)}
+        for s in sorted(links, key=lambda s: (len(s), s))
+        if s not in covered and s in master_by_id
+        and classify_status(master_by_id[s]["status"]) == "done"]
 
     return {
         "needs_download": needs_download,
         "duplicates": duplicates,
         "mark_timing": mark_timing,
         "anomalies": {
-            "unparsed_filenames": sorted(unparsed),
-            "file_id_unknown": file_id_unknown,
+            "nonstandard_naming": nonstandard_naming,
+            "special_files": special_files,
+            "unmatched_files": unmatched_files,
             "county_mismatch": county_mismatch,
             "links_not_in_master": links_not_in_master,
-            "master_dup_ids": sorted(master_dup_ids),
+            "master_dup_ids": master_dup_ids,
             "says_done_no_file": says_done_no_file,
         },
         "info": {
             "master_not_in_links": master_not_in_links,
             "covered_count": len(covered),
-            "file_count": len(files),
+            "timing_file_count": sum(len(v) for v in timing_by_id.values()),
+            "key_file_count": key_count,
+            "ignored_count": ignored_count,
         },
     }

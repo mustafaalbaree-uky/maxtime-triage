@@ -15,48 +15,95 @@ import triage_lib as T
 
 
 def build_mock_listing(links, master):
-    """A synthetic folder listing exercising every rule:
-    every links signal has a file EXCEPT five removed ones; one id is
-    duplicated; one file has a wrong county prefix; one file's id exists
-    nowhere; one filename does not parse.
+    """A synthetic folder listing exercising every rule, including the messy
+    real world naming: a stray space, a dash separator, a 'new' prefix, a
+    missing county code, a .key file that must not count as timing, a subsystem
+    (AWF) file, spreadsheets and dotfiles to ignore, a wrong county prefix, an
+    unknown id, and a route number that must not be mistaken for a signal id.
     """
     ids = sorted(links, key=lambda s: (len(s), s))
-    removed = ids[2:7]
+    removed = ids[2:7]  # five signals with no timing file at all
     master_by_id = {m["id"]: m for m in master}
     names = []
-    for sid in ids:
-        if sid in removed:
-            continue
+
+    def cc_for(sid):
         m = master_by_id.get(sid)
-        cc = "%03d" % int(m["county_id"]) if m and m["county_id"].isdigit() else "099"
+        return "%03d" % int(m["county_id"]) if m and m["county_id"].isdigit() else "099"
+
+    def label(sid):
         f = links[sid]
-        label = ("%s@%s" % (f["main"], f["side"])).replace(" ", "_")
-        names.append("%s_%s_%s.db" % (cc, sid, label))
-    dup_id = ids[0]
-    names.append("%s_%s_OLD_COPY.db" % (names[0][:3], dup_id))
+        return ("%s@%s" % (f["main"], f["side"])).replace(" ", "_")
+
     kept = [s for s in ids if s not in removed]
-    mismatch_id = kept[1]
+    for sid in kept:
+        names.append("%s_%s_%s" % (cc_for(sid), sid, label(sid)))  # standard, no ext
+
+    dup_id = ids[0]
+    names.append("%s_%s_OLD_COPY" % (cc_for(dup_id), dup_id))  # duplicate timing db
+
+    # nonstandard names that must still match by ID (these are NOT removed ids):
+    space_id, dash_id, new_id, nocounty_id = kept[1], kept[7], kept[8], kept[9]
+    names = [n for n in names if "_%s_" % space_id not in n]
+    names.append("%s_ %s_%s" % (cc_for(space_id), space_id, label(space_id)))  # stray space
+    names = [n for n in names if "_%s_" % dash_id not in n]
+    names.append("%s-%s_%s" % (cc_for(dash_id), dash_id, label(dash_id)))      # dash
+    names = [n for n in names if "_%s_" % new_id not in n]
+    names.append("new%s_%s_%s" % (cc_for(new_id), new_id, label(new_id)))      # new prefix
+    names = [n for n in names if "_%s_" % nocounty_id not in n]
+    names.append("%s-%s.key" % (nocounty_id, label(nocounty_id)))  # KEY file, no timing db
+    key_only_id = nocounty_id
+
+    mismatch_id = kept[10]
     names = [n for n in names if "_%s_" % mismatch_id not in n]
-    names.append("999_%s_WRONG_COUNTY.db" % mismatch_id)
-    names.append("055_9999_NOT_IN_ANY_SHEET.db")
-    names.append("notes about the folder.txt")
-    return sorted(names), removed, dup_id, mismatch_id
+    names.append("999_%s_WRONG_COUNTY" % mismatch_id)  # wrong county prefix
+
+    # a subsystem file for a REMOVED id: it must not count as timing coverage,
+    # but should be surfaced as a related special file.
+    awf_id = removed[0]
+    names.append("%s_ %s_%s_AWF_Flush" % (cc_for(awf_id), awf_id, label(awf_id)))
+
+    names.append("055_9999_NOT_IN_ANY_SHEET")     # unknown id -> unmatched
+    names.append("067-0000_KY57@KY1970_ICWS")     # id 0000 invalid, ICWS -> special
+    names.append("0000_D7_MaxTime Links.xlsx")    # ignore
+    names.append("desktop.ini")                   # ignore
+    names.append(".849C9593-hidden")              # ignore dotfile
+    names.append("District Contacts.pdf")         # ignore
+
+    return (sorted(names), removed, dup_id, mismatch_id,
+            {"space": space_id, "dash": dash_id, "new": new_id,
+             "key_only": key_only_id, "awf": awf_id})
 
 
 def main():
     links_path, master_path = sys.argv[1], sys.argv[2]
     links = T.parse_links(links_path)
     master = T.parse_master(master_path)
-    names, removed, dup_id, mismatch_id = build_mock_listing(links, master)
+    names, removed, dup_id, mismatch_id, variants = build_mock_listing(links, master)
     result = T.analyze(links, master, names)
-
-    need_ids = [e["id"] for e in result["needs_download"]]
-    assert set(need_ids) == set(removed), (need_ids, removed)
-    assert [d["id"] for d in result["duplicates"]] == [dup_id]
     an = result["anomalies"]
+
+    need_ids = {e["id"] for e in result["needs_download"]}
+    covered = {v for v in links} - need_ids
+    # the nonstandard-named ones must be treated as covered (matched by ID)
+    for key in ("space", "dash", "new"):
+        assert variants[key] in covered, (key, variants[key], "not covered")
+    # a key-only signal has no timing db, so it still needs download
+    assert variants["key_only"] in need_ids, "key file wrongly counted as timing"
+    # the AWF file must not cover its (removed) signal
+    assert variants["awf"] in need_ids, "AWF file wrongly counted as timing"
+    # ...but the AWF file shows up as a related special hint on that row
+    awf_row = next(e for e in result["needs_download"] if e["id"] == variants["awf"])
+    assert any(r["kind"] == "special" for r in awf_row["related_files"]), awf_row
+    # needs-download is the five removed signals plus the key-only one
+    assert set(need_ids) == set(removed) | {variants["key_only"]}, \
+        (sorted(need_ids), removed, variants["key_only"])
+    assert [d["id"] for d in result["duplicates"]] == [dup_id]
     assert any(c["id"] == mismatch_id for c in an["county_mismatch"])
-    assert "055_9999_NOT_IN_ANY_SHEET.db" in an["file_id_unknown"]
-    assert an["unparsed_filenames"] == ["notes about the folder.txt"]
+    assert "055_9999_NOT_IN_ANY_SHEET" in an["unmatched_files"]
+    assert any(s["name"].startswith("067-0000") for s in an["special_files"])
+    assert {n["id"] for n in an["nonstandard_naming"]} >= {
+        variants["space"], variants["dash"], variants["new"]}
+    assert result["info"]["ignored_count"] == 4
 
     data = pathlib.Path(__file__).parent.parent / "data"
     data.mkdir(exist_ok=True)
