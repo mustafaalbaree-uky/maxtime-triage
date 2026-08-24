@@ -127,7 +127,7 @@
 
 <script>
 "use strict";
-const BUILD = "v1.3.0, built 2026-08-24";
+const BUILD = "v1.4.0, built 2026-08-24";
 document.getElementById("stamp").textContent =
   "MaxTime Timing Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -642,7 +642,7 @@ function renderSummary() {
       "file exists, sheet not marked"],
     ["box", r.box_check.length, "box check", "n-warn",
       (() => { const d = r.box_check.filter(e => state.boxdone[e.id]).length;
-        return d ? d + " checked off" : "confirm box at :57150"; })()],
+        return d ? d + " checked off" : "pending :57150 access"; })()],
     ["anom", anomalyCount(r.anomalies), "anomalies", "n-warn", "worth a look"],
     ["cov", (Object.keys(state.links).length - r.needs_download.length) +
       " / " + Object.keys(state.links).length,
@@ -746,12 +746,20 @@ function renderPanel() {
       return;
     }
     p.innerHTML = `
+      <div class="card" style="border-color:var(--warn);background:#fff8ef;
+        margin-bottom:12px">
+        <b style="color:var(--warn)">Port 57150 may be blocked on the work
+        network.</b> If these links do not open, this step is on hold until you
+        get access. The list and your checkmarks are saved here and rebuild from
+        the sheets every time, so nothing is lost. Export a copy to be safe, then
+        come back and work the list once the port is reachable.</div>
       <div class="bar">
-        <span class="note">These signals are not yet confirmed in the box column
-        and are not front rack. Open each controller at port 57150, check
-        Properties for sensors to confirm the box, then mark the master column.
-        Loops usually mean no box (mark N A); radar or wavetronix means there is
-        a box to configure. Check a row off as you go.</span>
+        <button class="primary" id="btnBoxCsv">Export CSV</button>
+        <button id="btnBoxCopy">Copy list</button>
+        <span class="note">Open each controller at port 57150, check Properties
+        for sensors to confirm the box, then mark the master column. Loops usually
+        mean no box (mark N A); radar or wavetronix means there is a box to
+        configure. Check a row off as you go.</span>
       </div>
       <table><thead><tr><th></th><th>ID</th><th>County</th><th>Intersection</th>
       <th>Detection</th><th>Box column</th><th>Open at :57150</th>
@@ -774,6 +782,14 @@ function renderPanel() {
         else delete state.boxdone[cb.dataset.box];
         store.set("boxdone", state.boxdone); renderSummary(); renderPanel();
       };
+    document.getElementById("btnBoxCsv").onclick = () =>
+      downloadCSV("box_check.csv",
+        [["id", "county", "main", "side", "detection", "box_column", "url_57150", "master_row"],
+         ...r.box_check.map(e => [e.id, e.county, e.main, e.side, e.detection,
+           (e.box_fr + (e.box_done ? " / " + e.box_done : "")), e.url, e.master_row])]);
+    document.getElementById("btnBoxCopy").onclick = () =>
+      copyText(r.box_check.map(e => e.id + "\t" + e.url + "\trow " + e.master_row).join("\n"),
+        "box check list");
   } else if (state.tab === "anom") {
     const a = r.anomalies;
     const section = (title, exp, items) => items.length ? `
