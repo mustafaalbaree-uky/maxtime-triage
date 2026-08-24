@@ -1,0 +1,13 @@
+# Real data never enters this repo. Work files live in data/ locally only.
+data/
+*.xlsx
+*.db
+*.har
+*.csv
+listings*.txt
+node_modules/
+__pycache__/
+.DS_Store
+# The synthetic demo set is the one exception.
+!demo/*.xlsx
+!demo/*.csv
