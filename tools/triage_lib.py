@@ -96,8 +96,20 @@ def parse_links(path):
     return out
 
 
+def _find_box_done_col(header):
+    """The box confirmation column, under its old name ('Box Verified & saved
+    to CO sharepoint') or the renamed one ('Box Configuration Downloaded')."""
+    for col, text in header.items():
+        t = str(text).strip().lower()
+        if "box" in t and any(w in t for w in
+                              ("verif", "confirm", "config", "download")):
+            return col
+    return None
+
+
 def parse_master(path):
-    """List of master rows: {row, id, county, county_id, s1, s2, status}."""
+    """List of master rows: {row, id, county, county_id, s1, s2, status,
+    detection, box_fr, box_done}."""
     rows = read_sheet(path, "MASTER SIGNAL LIST")
     header = rows[0][1]
     c_id = _find_col(header, exact="ID#")
@@ -106,6 +118,9 @@ def parse_master(path):
     c_s1 = _find_col(header, exact="Street 1")
     c_s2 = _find_col(header, exact="Street 2")
     c_ab = _find_col(header, "timing", "sharepoint")
+    c_det = _find_col(header, exact="Detection")
+    c_boxfr = _find_col(header, "box", "rack")
+    c_boxdone = _find_box_done_col(header)
     out = []
     for rownum, r in rows[1:]:
         sid = str(r.get(c_id, "")).strip()
@@ -119,6 +134,9 @@ def parse_master(path):
             "s1": str(r.get(c_s1, "")).strip(),
             "s2": str(r.get(c_s2, "")).strip(),
             "status": str(r.get(c_ab, "")).strip(),
+            "detection": str(r.get(c_det, "")).strip(),
+            "box_fr": str(r.get(c_boxfr, "")).strip(),
+            "box_done": str(r.get(c_boxdone, "")).strip(),
         })
     return out
 
@@ -132,6 +150,22 @@ def classify_status(text):
         return "done"
     if t == "na" or t == "n/a":
         return "excluded"
+    return "todo"
+
+
+def classify_box(m):
+    """Whether a signal still needs its box configuration checked.
+
+    'frontrack' signals have no detection box and are skipped. 'done' means the
+    box column already records a confirmed/downloaded box. Otherwise 'todo':
+    the field still needs a look at http://IP:57150.
+    """
+    fr = (m.get("box_fr") or "").strip().lower()
+    done = (m.get("box_done") or "").strip().lower()
+    if "front" in fr or fr == "fr":
+        return "frontrack"
+    if any(w in done for w in ("yes", "confirm", "download", "done")):
+        return "done"
     return "todo"
 
 
@@ -290,10 +324,25 @@ def analyze(links, master, filenames):
         if s not in covered and s in master_by_id
         and classify_status(master_by_id[s]["status"]) == "done"]
 
+    box_check = []
+    for sid in sorted(links, key=lambda s: (len(s), s)):
+        m = master_by_id.get(sid)
+        lk = links[sid]
+        if not m or not lk["ip"] or classify_box(m) != "todo":
+            continue
+        box_check.append({
+            "id": sid, "master_row": m["row"], "county": lk["county"],
+            "main": lk["main"], "side": lk["side"],
+            "detection": m["detection"], "box_fr": m["box_fr"],
+            "box_done": m["box_done"],
+            "url": "http://%s:57150" % lk["ip"],
+        })
+
     return {
         "needs_download": needs_download,
         "duplicates": duplicates,
         "mark_timing": mark_timing,
+        "box_check": box_check,
         "anomalies": {
             "nonstandard_naming": nonstandard_naming,
             "special_files": special_files,

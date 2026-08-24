@@ -38,6 +38,10 @@ separate list flags the ones whose names should be standardized.
   note text for the sheet.
 - **Mark timing**: signals whose file exists but whose master sheet row does
   not say so yet, with the exact row number to update.
+- **Box check**: signals whose detection box is not yet confirmed in the master
+  sheet and that are not front rack, each with a direct link to the controller
+  at port 57150 where the box is confirmed. The detection type is shown so
+  loops (usually no box) are easy to tell from radar.
 - **Anomalies**: nonstandard file names worth retitling, county prefixes that
   contradict the master sheet, subsystem files (ICWS, AWF) that are not timing
   databases, files matching no known signal, signals linked but missing from
@@ -62,6 +66,20 @@ SharePoint stays a deliberate manual step. The two endpoints it uses are
 documented in `downloader/PROTOCOL.md`; an offline test
 (`downloader/test_downloader.py`) drives the client against a mock
 controller that replays them.
+
+## The workflow it supports
+
+1. Load the two sheets and the folder listing.
+2. Mark timing for the signals in that list, in the master sheet.
+3. Download the missing databases (the CSV export feeds
+   `downloader/fetch_missing.py`), confirm each is the intended one, and place
+   it in SharePoint.
+4. Work the box check list: open each controller at port 57150, confirm the
+   box, and update the master column.
+5. Resolve the anomalies by hand: retitle nonstandard files, reconcile
+   duplicate master rows, and fill in missing IDs.
+6. Rename the master sheet's box column from "Box Verified" to
+   "Box Configuration Downloaded"; the tool reads either name.
 
 ## Privacy by design
 

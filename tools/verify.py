@@ -104,6 +104,12 @@ def main():
     assert {n["id"] for n in an["nonstandard_naming"]} >= {
         variants["space"], variants["dash"], variants["new"]}
     assert result["info"]["ignored_count"] == 4
+    # box_check comes purely from the master and links sheets: every entry must
+    # have a :57150 link and correspond to a real todo row.
+    for e in result["box_check"]:
+        assert e["url"].endswith(":57150"), e
+        assert T.classify_box(next(m for m in master if m["id"] == e["id"]
+                                   and m["row"] == e["master_row"])) == "todo"
 
     data = pathlib.Path(__file__).parent.parent / "data"
     data.mkdir(exist_ok=True)
@@ -115,6 +121,7 @@ def main():
     print("needs download: %d  %s" % (len(need_ids), need_ids))
     print("duplicates: %s" % [d["id"] for d in result["duplicates"]])
     print("mark timing: %d" % len(result["mark_timing"]))
+    print("box check: %d" % len(result["box_check"]))
     for k, v in an.items():
         print("anomaly %s: %d" % (k, len(v)))
     print("info master_not_in_links: %d" % len(result["info"]["master_not_in_links"]))
