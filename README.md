@@ -41,12 +41,16 @@ The **Load demo data** button fills the page with a small synthetic dataset
 (fake counties, RFC 5737 documentation IP addresses) so the tool can be
 demonstrated without any real data. Both screenshots above show that demo set.
 
-**`downloader/fetch_missing.py`** (in progress) automates the per controller
-download itself: it reads the dashboard's CSV export, signs in to each
-controller, and saves the active database locally, sequentially, throttled,
-resumable, and strictly read only. The HTTP client is filled in from a one
-time DevTools capture; see `downloader/CAPTURE.md`. Copying results into
-SharePoint stays a deliberate manual step.
+**`downloader/fetch_missing.py`** automates the per controller download
+itself: it reads the dashboard's CSV export and, for each signal, asks the
+controller for its active database name and streams that database to disk,
+sequentially, throttled, resumable, and strictly read only. It needs no
+login (the controller API is open on the local network) and refuses to save
+a file whose ID does not match the row it came from. Copying results into
+SharePoint stays a deliberate manual step. The two endpoints it uses are
+documented in `downloader/PROTOCOL.md`; an offline test
+(`downloader/test_downloader.py`) drives the client against a mock
+controller that replays them.
 
 ## Privacy by design
 
@@ -86,8 +90,9 @@ install: `python3 fetch_missing.py needs_download.csv`.
 ## Repository layout
 
     webapp/index.html          the triage dashboard, fully self contained
-    downloader/fetch_missing.py  controller downloader (client pending capture)
-    downloader/CAPTURE.md      how to capture the MaxTime HTTP flow
+    downloader/fetch_missing.py  controller downloader
+    downloader/test_downloader.py  offline test against a mock controller
+    downloader/PROTOCOL.md     the two controller endpoints it uses
     tools/triage_lib.py        reference parsing and cross referencing logic
     tools/verify.py            builds mock listing and expected results
     docs/                      screenshots (synthetic demo data only)

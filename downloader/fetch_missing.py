@@ -3,69 +3,136 @@
 needs one, using the needs_download.csv exported by the triage dashboard.
 
 Python 3 stdlib only, so it runs on a locked down Windows machine with any
-plain Python install. Strictly read only against controllers: one sign in
-POST plus GET requests, nothing that changes state.
+plain Python install.
+
+How MaxTime actually works (established from a real capture):
+  * The controller's own API at http://IP:52270/maxtime/api/* is reachable
+    directly on the local network and needs no login. The web UI signs in
+    to a separate profile server, but the controller endpoints below carry
+    no cookie or token.
+  * The active user database name is read from
+        GET  /maxtime/api/mibs/UsrDBName
+  * The database file is streamed back by
+        POST /maxtime/api/db/download   body {"name": <name>, "type": "user"}
+
+Both calls only read; nothing here changes controller state.
 
 Usage:
     python3 fetch_missing.py needs_download.csv --out downloaded
+    python3 fetch_missing.py needs_download.csv --only 4070   # supervised first run
 
-Credentials are prompted at runtime, held in memory only, never stored,
-never logged. Files are written as CCC_IDID_<name>.db (or the filename the
-controller supplies) into the output folder; moving them into SharePoint
-stays a manual, visible step.
-
-STATUS: the sign in and download endpoints are not implemented yet.
-They require one HAR capture from the work computer: see CAPTURE.md in
-this folder. Everything around them (CSV input, throttling, resume,
-timeouts, the summary table) is finished and tested.
+Each saved file is named after the controller's own active database name, so
+it matches the SharePoint naming. Moving files into SharePoint stays a
+manual, visible step.
 """
 
 import argparse
 import csv
-import getpass
-import http.cookiejar
+import re
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
+# The controller reports its active database as e.g. 012_7004_SR90@SCHOOL_DR.
+DBNAME_RE = re.compile(rb"\d{3}_\d{4}_[ -~]{1,80}")
+# Saved file extension. The controller name carries none; set this if the real
+# download turns out to have one (confirm on the first supervised run).
+SAVE_EXT = ""
+
+
+class MaxTimeError(Exception):
+    pass
+
 
 class MaxTimeClient:
-    """HTTP client for one controller's MaxTime web UI.
+    """Read only client for one controller's MaxTime API. No auth needed."""
 
-    The three methods below are filled in from a HAR capture of one real
-    sign in and download (see CAPTURE.md). Until then they raise.
-    """
-
-    def __init__(self, base_url, timeout=20):
+    def __init__(self, base_url, timeout=25):
+        # base_url is like http://<controller-ip>:52270/maxtime/
         self.base = base_url.rstrip("/")
+        if self.base.endswith("/maxtime"):
+            self.origin = self.base[: -len("/maxtime")]
+        else:
+            self.origin = self.base
+        self.api = self.origin + "/maxtime/api"
         self.timeout = timeout
-        jar = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(jar))
 
-    def login(self, username, password):
-        """POST the Controller sign in form. Fill in from the HAR."""
-        raise NotImplementedError(
-            "Sign in endpoint unknown. Capture a HAR per CAPTURE.md and "
-            "have Claude fill in MaxTimeClient.")
+    def _headers(self, content_type=None):
+        h = {
+            "Accept": "*/*",
+            "Origin": self.origin,
+            "Referer": self.origin + "/maxtime/Administration/DatabaseManagement",
+            "User-Agent": "maxtime-triage-downloader",
+        }
+        if content_type:
+            h["Content-Type"] = content_type
+        return h
 
-    def active_database(self):
-        """Return (identifier, display name) of the user database marked
-        Active on the Database Management page. Fill in from the HAR."""
-        raise NotImplementedError
+    def _open(self, req):
+        try:
+            return urllib.request.urlopen(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise MaxTimeError(
+                    "controller refused the request (HTTP %d): this controller "
+                    "may require auth, unlike the captured one" % e.code)
+            raise MaxTimeError("HTTP %d from %s" % (e.code, req.full_url))
+        except urllib.error.URLError as e:
+            raise MaxTimeError("cannot reach controller: %s" % e.reason)
 
-    def download(self, identifier, dest_path):
-        """GET the database export and write it to dest_path.
-        Fill in from the HAR."""
-        raise NotImplementedError
+    def active_database_name(self):
+        """Return the active user database name, read from the UsrDBName MIB."""
+        req = urllib.request.Request(self.api + "/mibs/UsrDBName",
+                                     headers=self._headers())
+        blob = self._open(req).read()
+        matches = DBNAME_RE.findall(blob)
+        if not matches:
+            raise MaxTimeError("could not find a database name in UsrDBName "
+                               "(got %d bytes)" % len(blob))
+        # Trim trailing non name bytes the greedy match may have grabbed.
+        name = matches[0].decode("ascii", "replace").rstrip()
+        name = re.split(r"[\x00-\x1f]", name)[0].rstrip()
+        return name
+
+    def download(self, name, dest_path):
+        """Stream the named user database to dest_path."""
+        body = ('{"name":%s,"type":"user"}' % _json_str(name)).encode("utf-8")
+        req = urllib.request.Request(
+            self.api + "/db/download", data=body,
+            headers=self._headers("text/plain;charset=UTF-8"), method="POST")
+        resp = self._open(req)
+        tmp = dest_path.with_suffix(dest_path.suffix + ".part")
+        total = 0
+        with open(tmp, "wb") as f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+                total += len(chunk)
+        if total == 0:
+            tmp.unlink(missing_ok=True)
+            raise MaxTimeError("download returned an empty file")
+        tmp.replace(dest_path)
+        return total
 
 
-def slug(text):
-    keep = []
-    for ch in text.strip():
-        keep.append(ch if ch.isalnum() or ch in "@_" else "_")
-    return "".join(keep)
+def _json_str(s):
+    """Minimal JSON string encoder (stdlib json would also do, kept explicit)."""
+    out = ['"']
+    for ch in s:
+        if ch in '"\\':
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append("\\n")
+        elif ord(ch) < 0x20:
+            out.append("\\u%04x" % ord(ch))
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
 
 
 def already_downloaded(out_dir, signal_id):
@@ -78,7 +145,7 @@ def main():
     ap.add_argument("--out", default="downloaded", help="output folder")
     ap.add_argument("--delay", type=float, default=3.0,
                     help="seconds to wait between controllers (default 3)")
-    ap.add_argument("--timeout", type=float, default=20.0,
+    ap.add_argument("--timeout", type=float, default=25.0,
                     help="per request timeout in seconds")
     ap.add_argument("--only", help="comma separated signal IDs to limit the run,"
                     " e.g. --only 4070 for a supervised first test")
@@ -95,13 +162,10 @@ def main():
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    username = input("MaxTime username: ")
-    password = getpass.getpass("MaxTime password (not echoed, not stored): ")
-
     ok, failed, skipped = [], [], []
     for i, r in enumerate(rows):
         sid, url = r["id"], r["url"]
-        label = "%s %s @ %s (%s)" % (sid, r.get("main", ""), r.get("side", ""), url)
+        label = "%s  %s @ %s  (%s)" % (sid, r.get("main", ""), r.get("side", ""), url)
         if already_downloaded(out_dir, sid):
             print("skip %s: already in %s" % (sid, out_dir))
             skipped.append(sid)
@@ -111,25 +175,28 @@ def main():
         print("[%d/%d] %s" % (i + 1, len(rows), label))
         try:
             client = MaxTimeClient(url, timeout=args.timeout)
-            client.login(username, password)
-            ident, name = client.active_database()
-            dest = out_dir / ("%s.db" % slug(name))
-            client.download(ident, dest)
-            print("  saved %s" % dest.name)
+            name = client.active_database_name()
+            print("   active database: %s" % name)
+            m = re.match(r"(\d{3})_(\d{4})_", name)
+            if m and m.group(2) != sid:
+                print("   WARNING: controller reports id %s but CSV row is %s;"
+                      " skipping to avoid saving the wrong signal" % (m.group(2), sid))
+                failed.append((sid, "id mismatch: controller had %s" % m.group(2)))
+                continue
+            dest = out_dir / (name + SAVE_EXT)
+            size = client.download(name, dest)
+            print("   saved %s (%d bytes)" % (dest.name, size))
             ok.append(sid)
-        except NotImplementedError as e:
-            print("\nNot ready yet: %s" % e)
-            return 2
-        except Exception as e:
-            print("  FAILED: %s" % e)
+        except MaxTimeError as e:
+            print("   FAILED: %s" % e)
             failed.append((sid, str(e)))
 
     print("\nSummary: %d downloaded, %d failed, %d skipped"
           % (len(ok), len(failed), len(skipped)))
     for sid, why in failed:
-        print("  failed %s: %s" % (sid, why))
+        print("   failed %s: %s" % (sid, why))
     if failed:
-        print("Rerun the same command to retry: finished signals are skipped.")
+        print("Rerun the same command to retry; finished signals are skipped.")
     return 1 if failed else 0
 
 
