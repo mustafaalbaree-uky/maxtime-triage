@@ -232,6 +232,61 @@ def parse_listing(filenames, valid_ids):
     return [classify_file(n, valid_ids) for n in filenames if str(n).strip()]
 
 
+# ---------------------------------------------------------------------------
+# Intersection guesser for linked signals missing from the master sheet.
+# webapp/index.html carries the same logic in JS (nameTokens / guessScore /
+# guessRows); keep the two in step.
+
+ROUTE_PREFIXES = {"US", "KY", "I", "SR", "CR"}
+DIR_TOKENS = {"N", "S", "E", "W", "NB", "SB", "EB", "WB"}
+NAME_STOPWORDS = {"ST", "RD", "DR", "AVE", "LN", "PIKE", "BLVD", "PKWY",
+                  "WAY", "STREET", "ROAD", "THE", "AT", "AND"}
+ROUTE_TOKEN_RE = re.compile(r"^(US|KY|I|SR|CR)\d+$")
+
+
+def name_tokens(s):
+    parts = re.sub(r"[^A-Z0-9]+", " ", str(s or "").upper()).split()
+    out = set()
+    i = 0
+    while i < len(parts):
+        p = parts[i]
+        if p in ROUTE_PREFIXES and i + 1 < len(parts) and parts[i + 1].isdigit():
+            out.add(p + parts[i + 1])
+            i += 2
+            continue
+        if p in DIR_TOKENS:
+            out.add(p)
+        elif p not in NAME_STOPWORDS and (len(p) > 2 or p.isdigit()):
+            out.add(p)
+        i += 1
+    return out
+
+
+def guess_score(lk, m):
+    """How likely a master row m is the intersection of link entry lk.
+    Route numbers weigh most; same county and a blank ID add a bonus."""
+    a = name_tokens(lk["main"]) | name_tokens(lk["side"])
+    b = name_tokens(m["s1"]) | name_tokens(m["s2"])
+    if not a or not b:
+        return 0.0
+    inter = a & b
+    sc = len(inter) / len(a | b)
+    sc += 0.3 * sum(1 for t in inter if ROUTE_TOKEN_RE.match(t))
+    if str(lk.get("county", "")).strip().upper() == \
+            str(m.get("county", "")).strip().upper():
+        sc += 0.25
+    if not str(m.get("id", "")).strip():
+        sc += 0.15
+    return sc
+
+
+def guess_rows(lk, rows):
+    scored = [(guess_score(lk, m), m) for m in rows]
+    scored = [x for x in scored if x[0] >= 0.35]
+    scored.sort(key=lambda x: (-x[0], x[1]["row"]))
+    return scored[:4]
+
+
 def analyze(links, master, filenames):
     valid_ids = {i for i in links if i.isdigit() and len(i) == 4}
     valid_ids |= {m["id"] for m in master if m["id"].isdigit() and len(m["id"]) == 4}

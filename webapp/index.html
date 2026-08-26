@@ -63,6 +63,48 @@
   .bar .note { color: var(--muted); font-size: 12.5px; }
   .anom h3 { margin: 18px 0 6px; font-size: 14px; }
   .anom p.exp { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+  .anom p.verified { margin: 0 0 8px; color: var(--ok); font-size: 12.5px;
+    font-weight: 600; }
+  /* sheet column tab */
+  td.locked { background: #f6f3ec; color: #6a5f49; }
+  td.locked .lock { font-size: 11px; margin-right: 4px; opacity: .75; }
+  .auto { color: var(--ok); font-style: italic; }
+  .tag { font-size: 10.5px; border-radius: 5px; padding: 0 5px; margin-left: 6px;
+    text-transform: uppercase; letter-spacing: .4px; }
+  .tag.t-auto { background: #e3f4e8; color: var(--ok); }
+  .tag.t-over { background: #fbe4e2; color: var(--bad); }
+  .tag.t-link { background: #e8f0fe; color: var(--accent); }
+  .ov-old { text-decoration: line-through; color: var(--muted); margin-right: 6px; }
+  .ov-new { color: var(--bad); font-weight: 600; }
+  .mini { border: 0; background: none; color: var(--accent); cursor: pointer;
+    font-size: 12px; padding: 0 2px; }
+  .mini:hover { text-decoration: underline; }
+  .warnnote { color: var(--warn); font-size: 12px; }
+  .editwarn { color: var(--bad); font-size: 12px; margin-top: 4px; }
+  .editbox input[type=text] { border: 1px solid var(--bad); border-radius: 6px;
+    padding: 4px 6px; font: inherit; width: 100%; }
+  input.filter { border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 10px; font: inherit; width: 220px; }
+  /* linker for signals missing from the master */
+  .linkcard { margin-bottom: 10px; }
+  .linkcard .cand { display: flex; gap: 10px; align-items: baseline;
+    padding: 5px 0; border-top: 1px dashed var(--line); }
+  .linkcard .cand .sc { color: var(--muted);
+    font: 11px ui-monospace, Consolas, monospace; min-width: 34px; }
+  .linked { color: var(--ok); font-weight: 600; }
+  .idwarn { color: var(--bad); font-size: 12px; }
+  /* duplicate master rows side by side */
+  table.duptable { margin: 6px 0 4px; }
+  table.duptable td.diff { background: #fff3cd; }
+  table.duptable td.keep, table.duptable th.keep { background: #e3f4e8; }
+  /* blocking todo */
+  .card.todo { border-color: var(--bad); background: #fdf3f2; margin-bottom: 10px; }
+  .card.todo b { color: var(--bad); }
+  .card.todo.tododone { border-color: var(--ok); background: #f2faf4; }
+  .card.todo.tododone b { color: var(--ok); }
+  input.notebox { border: 1px solid var(--line); border-radius: 6px;
+    padding: 4px 8px; font: inherit; font-size: 12.5px; width: 100%;
+    max-width: 420px; margin-top: 6px; display: block; }
   .empty { padding: 26px; text-align: center; color: var(--muted);
     background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
   footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
@@ -127,9 +169,16 @@
 
 <script>
 "use strict";
-const BUILD = "v1.4.0, built 2026-08-24";
+const BUILD = "v1.5.0, built 2026-08-26";
 document.getElementById("stamp").textContent =
   "MaxTime Timing Triage " + BUILD + ". Local only: no network calls, no telemetry.";
+
+/* BASELINE-START: written by tools/embed_master.py, do not edit by hand.
+   The public copy of this file carries no data. The generator bakes the real
+   master sheet snapshot into webapp/d7.html, which stays out of the repo. */
+const BASELINE = null;
+/* BASELINE-END */
+const AUTO_TEXT = "timing (was already in sharepoint)";
 
 /* ---------- tiny zip + xlsx reader (no libraries) ---------- */
 async function unzip(buf) {
@@ -447,6 +496,48 @@ function analyze(links, master, filenames) {
   };
 }
 
+/* ---------- intersection guesser: mirrors triage_lib.py guess logic ----------
+   For a linked signal missing from the master, rank master rows by how well
+   their street names match. Route numbers (US 127, KY 686) weigh most; same
+   county and a blank ID (the expected home of an unnumbered row) add a bonus. */
+const ROUTE_PREFIXES = new Set(["US", "KY", "I", "SR", "CR"]);
+const DIR_TOKENS = new Set(["N", "S", "E", "W", "NB", "SB", "EB", "WB"]);
+const NAME_STOPWORDS = new Set(["ST", "RD", "DR", "AVE", "LN", "PIKE", "BLVD",
+  "PKWY", "WAY", "STREET", "ROAD", "THE", "AT", "AND"]);
+
+function nameTokens(s) {
+  const parts = String(s == null ? "" : s).toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ").split(" ").filter(Boolean);
+  const out = new Set();
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (ROUTE_PREFIXES.has(p) && i + 1 < parts.length && /^\d+$/.test(parts[i + 1])) {
+      out.add(p + parts[i + 1]); i++; continue;
+    }
+    if (DIR_TOKENS.has(p)) { out.add(p); continue; }
+    if (!NAME_STOPWORDS.has(p) && (p.length > 2 || /^\d+$/.test(p))) out.add(p);
+  }
+  return out;
+}
+
+function guessScore(lk, m) {
+  const a = new Set([...nameTokens(lk.main), ...nameTokens(lk.side)]);
+  const b = new Set([...nameTokens(m.s1), ...nameTokens(m.s2)]);
+  if (!a.size || !b.size) return 0;
+  const inter = [...a].filter(t => b.has(t));
+  let sc = inter.length / (a.size + b.size - inter.length);
+  sc += 0.3 * inter.filter(t => /^(US|KY|I|SR|CR)\d+$/.test(t)).length;
+  if (S(lk.county).toUpperCase() === S(m.county).toUpperCase()) sc += 0.25;
+  if (!S(m.id)) sc += 0.15;
+  return sc;
+}
+
+function guessRows(lk, rows) {
+  return rows.map(m => ({ m, sc: guessScore(lk, m) }))
+    .filter(x => x.sc >= 0.35)
+    .sort((x, y) => y.sc - x.sc || x.m.row - y.m.row).slice(0, 4);
+}
+
 /* ---------- state ---------- */
 const store = {
   get(k, d) { try { const v = localStorage.getItem("mtt." + k);
@@ -462,9 +553,29 @@ let state = {
   listingLabel: store.get("listingLabel", ""),
   done: store.get("done", {}),
   boxdone: store.get("boxdone", {}),
+  override: store.get("override", {}),      // sheet row -> forced column text
+  linkAssign: store.get("linkAssign", {}),  // signal id -> {row} or {missing:true}
+  dupResolve: store.get("dupResolve", {}),  // dup id -> {keep|flag, note}
+  countyTodo: store.get("countyTodo", {}),  // file name -> {done, note}
   tab: store.get("tab", "needs"),
 };
 let result = null;
+let editingRow = null;  // sheet row currently open for a force edit, not saved
+let colFilter = "", colChangesOnly = false;  // sheet column view filters
+
+/* Every master sheet row, whether or not it has an ID. From the baked in
+   snapshot when this is the generated copy, else derived from the dropped
+   master sheet (which skips rows with a blank ID). */
+function baselineRows() {
+  if (BASELINE) return BASELINE.rows;
+  return state.master || [];
+}
+
+function effectiveMaster() {
+  if (state.master) return state.master;
+  if (BASELINE) return BASELINE.rows.filter(r => S(r.id));
+  return null;
+}
 
 function toast(msg) {
   const t = document.getElementById("toast");
@@ -588,11 +699,14 @@ function wireInputs() {
     if (names.length) setListing(names, "pasted list, " + names.length + " files");
   };
   document.getElementById("btnClear").onclick = () => {
-    if (!confirm("Forget the loaded sheets, listing, and all checkmarks?")) return;
-    for (const k of ["links", "master", "listing", "listingLabel", "done", "boxdone", "tab"])
+    if (!confirm("Forget the loaded sheets, the listing, all checkmarks, and "
+      + "all column edits, row links, and duplicate decisions?")) return;
+    for (const k of ["links", "master", "listing", "listingLabel", "done",
+      "boxdone", "override", "linkAssign", "dupResolve", "countyTodo", "tab"])
       store.del(k);
     state = { links: null, master: null, listing: null, listingLabel: "",
-      done: {}, boxdone: {}, tab: "needs" };
+      done: {}, boxdone: {}, override: {}, linkAssign: {}, dupResolve: {},
+      countyTodo: {}, tab: "needs" };
     refresh(); toast("Cleared");
   };
   document.getElementById("btnDemo").onclick = loadDemo;
@@ -603,6 +717,7 @@ const h = s => String(s == null ? "" : s).replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function refresh() {
+  const master = effectiveMaster();
   const sx = document.getElementById("stateXlsx");
   sx.innerHTML =
     (state.links
@@ -610,16 +725,18 @@ function refresh() {
       : `<span class="miss">Links sheet: waiting</span>`) + "<br>" +
     (state.master
       ? `<span class="got">Master sheet: ${state.master.length} rows</span>`
-      : `<span class="miss">Master sheet: waiting</span>`);
+      : (BASELINE
+        ? `<span class="got">Master sheet: baked in snapshot, ${BASELINE.rows.length} rows (${h(BASELINE.generated)})</span>`
+        : `<span class="miss">Master sheet: waiting</span>`));
   document.getElementById("stateFolder").innerHTML = state.listing
     ? `<span class="got">Listing loaded (${h(state.listingLabel)})</span>`
     : `<span class="miss">Folder listing: waiting</span>`;
 
-  const ready = state.links && state.master && state.listing;
+  const ready = state.links && master && state.listing;
   document.getElementById("results").style.display = ready ? "" : "none";
   document.getElementById("placeholder").style.display = ready ? "none" : "";
   if (!ready) { result = null; window.__triage = null; return; }
-  result = analyze(state.links, state.master, state.listing);
+  result = analyze(state.links, master, state.listing);
   window.__triage = result;
   renderSummary(); renderPanel();
 }
@@ -631,9 +748,38 @@ function anomalyCount(a) {
     a.says_done_no_file.length;
 }
 
+/* One entry per master sheet row: what the timing column already says (base),
+   and what it should say now (out). Autofill applies only where the sheet cell
+   is blank and a timing file exists; a force edit always wins. */
+function computeColumn() {
+  const rows = baselineRows();
+  if (!rows.length || !result) return [];
+  const needIds = new Set(result.needs_download.map(e => e.id));
+  const covered = new Set(Object.keys(state.links).filter(s => !needIds.has(s)));
+  const linkedByRow = {};
+  for (const [sid, v] of Object.entries(state.linkAssign))
+    if (v && v.row != null) linkedByRow[v.row] = sid;
+  return rows.map(r => {
+    const base = S(r.status);
+    const linked = S(r.id) ? null : (linkedByRow[r.row] || null);
+    const sid = S(r.id) || linked;
+    let kind = base ? "kept" : "blank", out = base;
+    if (!base && sid && covered.has(sid)) { kind = "auto"; out = AUTO_TEXT; }
+    const conflict = !!(base && classifyStatus(base) === "todo"
+      && sid && covered.has(sid));
+    const ov = Object.prototype.hasOwnProperty.call(state.override, r.row)
+      ? state.override[r.row] : null;
+    if (ov != null) { kind = "override"; out = ov; }
+    return { row: r.row, id: S(r.id), linked, sid, county: r.county,
+      s1: r.s1, s2: r.s2, base, out, kind, conflict };
+  });
+}
+
 function renderSummary() {
   const r = result;
   const doneCount = r.needs_download.filter(e => state.done[e.id]).length;
+  const col = computeColumn();
+  const colChanged = col.filter(x => x.kind === "auto" || x.kind === "override").length;
   const defs = [
     ["needs", r.needs_download.length, "need download", "n-bad",
       doneCount ? doneCount + " checked off" : "controllers without a file"],
@@ -643,6 +789,8 @@ function renderSummary() {
     ["box", r.box_check.length, "box check", "n-warn",
       (() => { const d = r.box_check.filter(e => state.boxdone[e.id]).length;
         return d ? d + " checked off" : "pending :57150 access"; })()],
+    ["col", colChanged, "sheet column", "n-ok",
+      col.length ? col.length + " rows, copy and paste back" : "needs the master sheet"],
     ["anom", anomalyCount(r.anomalies), "anomalies", "n-warn", "worth a look"],
     ["cov", (Object.keys(state.links).length - r.needs_download.length) +
       " / " + Object.keys(state.links).length,
@@ -658,6 +806,7 @@ function renderSummary() {
 
 function renderPanel() {
   const p = document.getElementById("panel");
+  p.onclick = null; p.onchange = null;  // drop handlers from the previous tab
   const r = result;
   if (state.tab === "needs") {
     if (!r.needs_download.length) {
@@ -790,13 +939,312 @@ function renderPanel() {
     document.getElementById("btnBoxCopy").onclick = () =>
       copyText(r.box_check.map(e => e.id + "\t" + e.url + "\trow " + e.master_row).join("\n"),
         "box check list");
+  } else if (state.tab === "col") {
+    const col = computeColumn();
+    if (!col.length) {
+      p.innerHTML = `<div class="empty">This view needs the master sheet
+        (or the generated copy with the snapshot baked in).</div>`;
+      return;
+    }
+    const nAuto = col.filter(x => x.kind === "auto").length;
+    const nOver = col.filter(x => x.kind === "override").length;
+    const nKept = col.filter(x => x.kind === "kept").length;
+    const flt = colFilter.trim().toLowerCase();
+    const shown = col.filter(x => {
+      if (colChangesOnly && x.kind !== "auto" && x.kind !== "override"
+        && !x.conflict) return false;
+      if (!flt) return true;
+      return [x.id, x.sid, x.county, x.s1, x.s2, x.base, x.out, "row " + x.row]
+        .some(v => S(v).toLowerCase().includes(flt));
+    });
+    const srcNote = BASELINE
+      ? `snapshot of ${h(BASELINE.source)}, taken ${h(BASELINE.generated)}`
+      : "from the dropped master sheet (rows with a blank ID are not shown; "
+        + "use the generated copy for the full column)";
+    p.innerHTML = `
+      <div class="card" style="margin-bottom:12px">
+        <b>The master sheet's "Timing &amp; key updated to sharepoint" column</b>,
+        ${srcNote}. The left value is what the people before you already wrote:
+        it is locked, and it stays in the output unchanged. Where the cell is
+        blank but a timing file exists in SharePoint, the output autofills
+        "${h(AUTO_TEXT)}". A force edit overwrites what was already there:
+        only do it when you are certain.</div>
+      <div class="bar">
+        <button class="primary" id="btnCopyCol">Copy the whole column</button>
+        <button id="btnCopyChanges">Copy changed cells only (row and value)</button>
+        <input class="filter" id="colFilter" placeholder="filter rows"
+          value="${h(colFilter)}">
+        <label style="font-size:12.5px;color:var(--muted)">
+          <input type="checkbox" id="colChanges" ${colChangesOnly ? "checked" : ""}>
+          changes only</label>
+        <span class="note">${nKept} already filled, ${nAuto} autofilled,
+        ${nOver} forced. Paste the full column over the sheet column starting
+        at row ${BASELINE ? BASELINE.firstRow : 2}.</span>
+      </div>
+      <table><thead><tr><th>Sheet row</th><th>ID</th><th>County</th>
+      <th>Intersection</th><th>Already in the sheet</th>
+      <th>Column to paste back</th></tr></thead><tbody>` +
+      shown.map(x => {
+        let outCell;
+        if (editingRow === x.row) {
+          outCell = `<div class="editbox">
+            <input type="text" id="ovInput" data-editrow="${x.row}"
+              value="${h(Object.prototype.hasOwnProperty.call(state.override, x.row)
+                ? state.override[x.row] : x.out)}">
+            <div class="editwarn">You are overwriting what was already written
+            in the sheet: "${h(x.base) || "(blank)"}". Leave it alone unless you
+            are sure.</div>
+            <button class="mini" data-saveedit="${x.row}">save</button>
+            <button class="mini" data-canceledit="1">cancel</button></div>`;
+        } else if (x.kind === "override") {
+          outCell = `<span class="ov-old">${h(x.base) || "(blank)"}</span>
+            <span class="ov-new">${h(x.out) || "(cleared)"}</span>
+            <span class="tag t-over">forced</span>
+            <button class="mini" data-revert="${x.row}">revert</button>`;
+        } else if (x.kind === "auto") {
+          outCell = `<span class="auto">${h(x.out)}</span>
+            <span class="tag t-auto">auto</span>
+            <button class="mini" data-edit="${x.row}">force edit</button>`;
+        } else {
+          outCell = (x.out ? h(x.out)
+            : `<span style="color:var(--muted)">(blank)</span>`)
+            + ` <button class="mini" data-edit="${x.row}">force edit</button>`;
+        }
+        if (x.conflict && editingRow !== x.row)
+          outCell += `<div class="warnnote">a timing file exists for
+            ${h(x.sid)} but this text does not say timing; check it</div>`;
+        const idCell = x.id ? `<span class="chip">${h(x.id)}</span>`
+          : (x.linked
+            ? `<span class="chip">${h(x.linked)}</span><span class="tag t-link">linked</span>`
+            : `<span style="color:var(--muted)">blank</span>`);
+        return `<tr><td>${x.row}</td><td>${idCell}</td><td>${h(x.county)}</td>
+          <td>${h(x.s1)} @ ${h(x.s2)}</td>
+          <td class="locked"><span class="lock">&#128274;</span>${h(x.base)
+            || '<span style="opacity:.55">blank</span>'}</td>
+          <td>${outCell}</td></tr>`;
+      }).join("") + `</tbody></table>
+      ${shown.length !== col.length
+        ? `<p class="note" style="color:var(--muted)">${shown.length} of
+           ${col.length} rows shown. The copy buttons always use every row.</p>`
+        : ""}`;
+    document.getElementById("btnCopyCol").onclick = () => {
+      const byRow = {};
+      col.forEach(x => byRow[x.row] = x.out);
+      const first = BASELINE ? BASELINE.firstRow : Math.min(...col.map(x => x.row));
+      const last = BASELINE ? BASELINE.lastRow : Math.max(...col.map(x => x.row));
+      const lines = [];
+      for (let rr = first; rr <= last; rr++)
+        lines.push(byRow[rr] != null ? byRow[rr] : "");
+      copyText(lines.join("\n"),
+        `the column: ${lines.length} cells, paste at sheet row ${first}`);
+    };
+    document.getElementById("btnCopyChanges").onclick = () => {
+      const ch = col.filter(x => x.kind === "auto" || x.kind === "override");
+      if (!ch.length) { toast("No changed cells"); return; }
+      copyText(ch.map(x => "row " + x.row + "\t" + x.out).join("\n"),
+        ch.length + " changed cells");
+    };
+    document.getElementById("colFilter").oninput = e => {
+      colFilter = e.target.value;
+      clearTimeout(renderPanel._t);
+      renderPanel._t = setTimeout(() => {
+        const pos = e.target.selectionStart;
+        renderPanel();
+        const el = document.getElementById("colFilter");
+        if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+      }, 250);
+    };
+    document.getElementById("colChanges").onchange = e => {
+      colChangesOnly = e.target.checked; renderPanel();
+    };
+    p.onclick = ev => {
+      const b = ev.target.closest("[data-edit],[data-saveedit],[data-canceledit],[data-revert]");
+      if (!b) return;
+      if (b.dataset.edit) { editingRow = +b.dataset.edit; renderPanel(); }
+      else if (b.dataset.saveedit) {
+        const inp = document.getElementById("ovInput");
+        const row = +b.dataset.saveedit;
+        const x = col.find(y => y.row === row);
+        const val = inp ? inp.value : "";
+        editingRow = null;
+        if (x && x.kind !== "override" && val === x.out) {
+          renderPanel(); return;  // nothing actually changed
+        }
+        state.override[row] = val;
+        store.set("override", state.override);
+        renderSummary(); renderPanel();
+        toast("Forced row " + row);
+      } else if (b.dataset.canceledit) { editingRow = null; renderPanel(); }
+      else if (b.dataset.revert) {
+        delete state.override[b.dataset.revert];
+        store.set("override", state.override);
+        renderSummary(); renderPanel();
+        toast("Reverted row " + b.dataset.revert);
+      }
+    };
+    const ov = document.getElementById("ovInput");
+    if (ov) {
+      ov.focus();
+      ov.onkeydown = e => {
+        if (e.key === "Enter")
+          p.querySelector("[data-saveedit]").click();
+        if (e.key === "Escape") { editingRow = null; renderPanel(); }
+      };
+    }
   } else if (state.tab === "anom") {
     const a = r.anomalies;
-    const section = (title, exp, items) => items.length ? `
+    const notes = (BASELINE && BASELINE.notes) || {};
+    const verified = key => notes[key]
+      ? `<p class="verified">${h(notes[key])}</p>` : "";
+    const section = (title, exp, items, extra) => items.length ? `
       <div class="anom"><h3>${title} (${items.length})</h3>
-      <p class="exp">${exp}</p>
+      <p class="exp">${exp}</p>${extra || ""}
       <div class="card" style="font:12px ui-monospace,Consolas,monospace;
         max-height:220px;overflow:auto">${items.map(h).join("<br>")}</div></div>` : "";
+
+    /* county prefix disagreements are blocking TODOs, checked off by hand */
+    const countySec = !a.county_mismatch.length ? "" : (() => {
+      const open = a.county_mismatch
+        .filter(c => !(state.countyTodo[c.file] || {}).done).length;
+      return `<div class="anom">
+        <h3>County prefix disagrees with the master sheet (${a.county_mismatch.length}${
+          open ? `, <span style="color:var(--bad)">${open} open</span>` : ", all checked"})</h3>
+        <p class="exp">Blocking TODO: the task is not complete while any of
+        these is unchecked. Work out by hand which side is right. If the master
+        sheet is wrong, tell the supervisor. If our file title is wrong, retitle
+        the file. If the downloaded database itself belongs to a different
+        intersection, that is the biggest problem: stop and raise it right
+        away.</p>` +
+        a.county_mismatch.map(c => {
+          const t = state.countyTodo[c.file] || {};
+          return `<div class="card todo${t.done ? " tododone" : ""}">
+            <b>${t.done ? "Checked by hand:" : "TODO:"}</b> ${h(c.file)}
+            (file says ${h(c.file_county)}, master says ${h(c.master_county)},
+            signal ${h(c.id)})
+            <label style="display:block;margin-top:6px">
+              <input type="checkbox" data-ctodo="${h(c.file)}"
+                ${t.done ? "checked" : ""}> checked which county is actually right
+            </label>
+            <input class="notebox" type="text" data-ctodonote="${h(c.file)}"
+              placeholder="what you found" value="${h(t.note || "")}">
+          </div>`;
+        }).join("") + `</div>`;
+    })();
+
+    /* linker: signals with a MaxTime link but no master row */
+    const linkSec = !a.links_not_in_master.length ? "" : (() => {
+      const allRows = baselineRows();
+      const linkedCount = a.links_not_in_master
+        .filter(x => state.linkAssign[x.id]).length;
+      const items = a.links_not_in_master.map(x => {
+        const lk = state.links[x.id] || { county: x.county, main: x.main,
+          side: x.side };
+        const asg = state.linkAssign[x.id];
+        let body;
+        if (asg && asg.row != null) {
+          const m = allRows.find(rr => rr.row === asg.row) || {};
+          body = `<div class="cand"><span class="linked">Linked to sheet row
+            ${asg.row}: ${h(m.county)} ${h(m.s1)} @ ${h(m.s2)}</span>
+            <button class="mini" data-clearlink="${h(x.id)}">clear</button></div>` +
+            (S(m.id) && S(m.id) !== x.id
+              ? `<div class="idwarn">That row already carries ID ${h(m.id)}.
+                 Linking it means the sheet's ID there is wrong: check by hand
+                 before changing anything.</div>`
+              : "");
+        } else if (asg && asg.missing) {
+          body = `<div class="cand"><span class="warnnote">Marked: not in the
+            sheet, a new row must be added.</span>
+            <button class="mini" data-clearlink="${h(x.id)}">clear</button></div>`;
+        } else {
+          const gs = guessRows(lk, allRows);
+          body = (gs.map(g => `<div class="cand">
+            <span class="sc">${g.sc.toFixed(2)}</span>
+            <span>row ${g.m.row}: ${h(g.m.county)} ${h(g.m.s1)} @ ${h(g.m.s2)}
+              ${S(g.m.id)
+                ? `<span class="idwarn">already has ID ${h(g.m.id)}</span>`
+                : `<span class="chip">blank ID</span>`}</span>
+            <button data-pick="${h(x.id)}" data-row="${g.m.row}">It's this
+              row</button></div>`).join("")
+            || `<div class="cand"><span class="warnnote">no plausible row
+               found in the sheet</span></div>`) +
+            `<div class="cand"><button data-newrow="${h(x.id)}">Not in the
+              sheet, needs a new row</button></div>`;
+        }
+        return `<div class="card linkcard">
+          <span class="chip">${h(x.id)}</span> <b>${h(x.county)}</b>
+          &nbsp;${h(x.main)} @ ${h(x.side)}${body}</div>`;
+      }).join("");
+      return `<div class="anom">
+        <h3>Linked signals missing from the master sheet
+          (${a.links_not_in_master.length}, ${linkedCount} decided)</h3>
+        <p class="exp">Each has a MaxTime link but no master row with its ID.
+        The rows below are the tool's best guesses from the street names,
+        best first; many sheet rows exist with the ID left blank. Click the
+        matching row, then check the intersection by hand before trusting it.
+        Once linked, the ID can be typed into that sheet row.</p>
+        <div class="bar">
+          <button id="btnCopyLinks">Copy ID assignments</button>
+          <span class="note">one line per decided signal: the sheet row to
+          type the ID into, or NEW for a row to add</span>
+        </div>${items}</div>`;
+    })();
+
+    /* duplicate master rows, side by side */
+    const dupSec = !a.master_dup_ids.length ? "" : (() => {
+      const master = effectiveMaster() || [];
+      const byId = {};
+      for (const m of master) (byId[m.id] = byId[m.id] || []).push(m);
+      const FIELDS = [["county", "County"], ["county_id", "CountyID"],
+        ["s1", "Street 1"], ["s2", "Street 2"], ["status", "Timing column"],
+        ["detection", "Detection"], ["box_fr", "Box or FR"],
+        ["box_done", "Box verified"]];
+      const cards = a.master_dup_ids.map(d => {
+        const rows2 = byId[d.id] || [];
+        const res = state.dupResolve[d.id] || {};
+        const differs = f =>
+          new Set(rows2.map(m2 => S(m2[f]).toLowerCase())).size > 1;
+        const cell = (m2, f) => {
+          const cls = (differs(f) ? "diff" : "")
+            + (res.keep === m2.row ? " keep" : "");
+          return `<td class="${cls}">${h(m2[f])
+            || '<span style="color:var(--muted)">(blank)</span>'}</td>`;
+        };
+        return `<div class="card" style="margin-bottom:12px">
+          <b>ID ${h(d.id)} appears on ${rows2.length} rows</b>
+          ${res.flag ? `<span class="tag t-over">flagged for supervisor</span>` : ""}
+          <div style="overflow:auto"><table class="duptable"><thead><tr><th></th>
+          ${rows2.map(m2 => `<th class="${res.keep === m2.row ? "keep" : ""}">
+            Row ${m2.row}${res.keep === m2.row ? " (keeping)" : ""}</th>`).join("")}
+          </tr></thead><tbody>
+          ${FIELDS.map(([f, label]) => `<tr><th>${label}</th>
+            ${rows2.map(m2 => cell(m2, f)).join("")}</tr>`).join("")}
+          <tr><th></th>${rows2.map(m2 => `<td>
+            <button data-keep="${h(d.id)}" data-row="${m2.row}">
+            ${res.keep === m2.row ? "Keeping this row" : "Keep this row"}
+            </button></td>`).join("")}</tr>
+          </tbody></table></div>
+          <button class="mini" data-dupflag="${h(d.id)}">${res.flag
+            ? "flagged for the supervisor, click to unflag"
+            : "unsure, flag for the supervisor"}</button>
+          <input class="notebox" type="text" data-dupnote="${h(d.id)}"
+            placeholder="notes: what differs, which one you trust"
+            value="${h(res.note || "")}">
+        </div>`;
+      }).join("");
+      const decided = a.master_dup_ids
+        .filter(d => (state.dupResolve[d.id] || {}).keep
+          || (state.dupResolve[d.id] || {}).flag).length;
+      return `<div class="anom">
+        <h3>Duplicate ID rows inside the master sheet
+          (${a.master_dup_ids.length}, ${decided} decided)</h3>
+        <p class="exp">The same ID appears on more than one master row, shown
+        side by side with the differences highlighted. Pick the row to keep,
+        or flag it for the supervisor if it is not obvious. Nothing is deleted
+        here: your picks and notes are a worklist for editing the sheet.</p>
+        <div class="bar"><button id="btnCopyDupRes">Copy decisions</button></div>
+        ${cards}</div>`;
+    })();
+
     p.innerHTML =
       section("Sheet says timing is done but no timing file exists",
         "The master timing column reads as done, yet no timing database is in "
@@ -805,34 +1253,98 @@ function renderPanel() {
         a.says_done_no_file.map(s => s.id +
           (s.related_files.length
             ? " (found: " + s.related_files.map(f => f.name + " [" + f.kind + "]").join(", ") + ")"
-            : ""))) +
+            : "")), verified("says_done")) +
       section("Nonstandard file names, matched by ID but worth retitling",
         "These were matched to a signal by their ID even though the name has a "
         + "stray space, a dash, a missing county code, or a new prefix. The "
         + "standard is CCC_IDID_name.",
-        a.nonstandard_naming.map(n => n.id + "  ->  " + n.name)) +
-      section("County prefix disagrees with the master sheet",
-        "The 3 digit prefix should match the master CountyID.",
-        a.county_mismatch.map(c =>
-          `${c.file} (file says ${c.file_county}, master says ${c.master_county})`)) +
+        a.nonstandard_naming.map(n => n.id + "  ->  " + n.name),
+        verified("nonstandard")) +
+      countySec +
       section("Subsystem files (ICWS, AWF, ITS), not intersection timing",
         "Shown for awareness. These are separate systems and do not count as "
         + "timing coverage.",
         a.special_files.map(s => s.name + (s.id ? "  (id " + s.id + ")" : ""))) +
       section("Files with no recognizable signal ID",
         "No known 4 digit signal ID was found in these names.", a.unmatched_files) +
-      section("Linked signals missing from the master sheet",
-        "IDs with a MaxTime link but no master row. Check whether the master "
-        + "already has this intersection with the ID left blank before adding a row.",
-        a.links_not_in_master.map(x =>
-          x.id + "  " + (x.county || "") + "  " + (x.main || "") + " @ " + (x.side || ""))) +
-      section("Duplicate ID rows inside the master sheet",
-        "The same ID appears on more than one master row. Compare them and keep one.",
-        a.master_dup_ids.map(d => d.id + ":  " +
-          d.rows.map(r => "row " + r.row + " " + (r.s1 || "") + "@" + (r.s2 || "")
-            + (r.status ? " [" + r.status + "]" : "")).join("   |   "))) ||
+      linkSec + dupSec ||
       `<div class="empty">No anomalies.</div>`;
     if (!anomalyCount(a)) p.innerHTML = `<div class="empty">No anomalies.</div>`;
+
+    p.onclick = ev => {
+      const b = ev.target.closest(
+        "[data-pick],[data-newrow],[data-clearlink],[data-keep],[data-dupflag]");
+      if (!b) return;
+      if (b.dataset.pick) {
+        state.linkAssign[b.dataset.pick] = { row: +b.dataset.row };
+        store.set("linkAssign", state.linkAssign);
+        toast("Linked " + b.dataset.pick + " to row " + b.dataset.row
+          + ". Check it by hand.");
+      } else if (b.dataset.newrow) {
+        state.linkAssign[b.dataset.newrow] = { missing: true };
+        store.set("linkAssign", state.linkAssign);
+      } else if (b.dataset.clearlink) {
+        delete state.linkAssign[b.dataset.clearlink];
+        store.set("linkAssign", state.linkAssign);
+      } else if (b.dataset.keep) {
+        const cur = state.dupResolve[b.dataset.keep] || {};
+        cur.keep = cur.keep === +b.dataset.row ? null : +b.dataset.row;
+        state.dupResolve[b.dataset.keep] = cur;
+        store.set("dupResolve", state.dupResolve);
+      } else if (b.dataset.dupflag) {
+        const cur = state.dupResolve[b.dataset.dupflag] || {};
+        cur.flag = !cur.flag;
+        state.dupResolve[b.dataset.dupflag] = cur;
+        store.set("dupResolve", state.dupResolve);
+      }
+      renderSummary(); renderPanel();
+    };
+    p.onchange = ev => {
+      const t = ev.target;
+      if (t.dataset.ctodo != null) {
+        const cur = state.countyTodo[t.dataset.ctodo] || {};
+        cur.done = t.checked ? new Date().toISOString() : null;
+        state.countyTodo[t.dataset.ctodo] = cur;
+        store.set("countyTodo", state.countyTodo);
+        renderPanel();
+      } else if (t.dataset.ctodonote != null) {
+        const cur = state.countyTodo[t.dataset.ctodonote] || {};
+        cur.note = t.value;
+        state.countyTodo[t.dataset.ctodonote] = cur;
+        store.set("countyTodo", state.countyTodo);
+      } else if (t.dataset.dupnote != null) {
+        const cur = state.dupResolve[t.dataset.dupnote] || {};
+        cur.note = t.value;
+        state.dupResolve[t.dataset.dupnote] = cur;
+        store.set("dupResolve", state.dupResolve);
+      }
+    };
+    const bl = document.getElementById("btnCopyLinks");
+    if (bl) bl.onclick = () => {
+      const rowsOut = [], newsOut = [];
+      for (const x of a.links_not_in_master) {
+        const asg = state.linkAssign[x.id];
+        if (asg && asg.row != null) rowsOut.push([asg.row, x.id]);
+        else if (asg && asg.missing)
+          newsOut.push("NEW\t" + x.id + "\t" + (x.county || "") + "\t"
+            + (x.main || "") + " @ " + (x.side || ""));
+      }
+      rowsOut.sort((p1, p2) => p1[0] - p2[0]);
+      const text = rowsOut.map(([rr, sid]) => "row " + rr + "\t" + sid)
+        .concat(newsOut).join("\n");
+      if (!text) { toast("Nothing decided yet"); return; }
+      copyText(text, (rowsOut.length + newsOut.length) + " ID assignments");
+    };
+    const bd = document.getElementById("btnCopyDupRes");
+    if (bd) bd.onclick = () => {
+      const lines = a.master_dup_ids.map(d => {
+        const res = state.dupResolve[d.id] || {};
+        const what = res.keep ? "keep row " + res.keep
+          : res.flag ? "flagged for supervisor" : "undecided";
+        return d.id + "\t" + what + (res.note ? "\t" + res.note : "");
+      });
+      copyText(lines.join("\n"), "duplicate row decisions");
+    };
   } else if (state.tab === "cov") {
     p.innerHTML = `
       <div class="anom"><h3>Coverage</h3>

@@ -1,4 +1,7 @@
 # Real data never enters this repo. Work files live in data/ locally only.
+# webapp/d7.html is index.html with the real master sheet snapshot baked in
+# by tools/embed_master.py; it must stay out too.
+webapp/d7*.html
 data/
 *.xlsx
 *.db

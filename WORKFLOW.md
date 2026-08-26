@@ -5,9 +5,15 @@ opened in Edge; the downloader is a small Python script. Nothing is uploaded.
 
 ## One time setup
 
-1. From the repository, save `webapp/index.html` to the work computer (open the
-   file, use the raw view, save keeping the `.html` extension), or email it to
-   yourself and save the attachment. Double click it to open in Edge.
+1. Take the dashboard to the work computer and double click it to open in Edge.
+   Preferred: generate `webapp/d7.html` first (on the home Mac, run
+   `python3 tools/embed_master.py <master.xlsx>`) and carry that file; it has
+   the master sheet snapshot baked in, so the sheet column view works and the
+   master sheet never needs to be dropped again. `d7.html` holds real district
+   data: it is gitignored and moves by email or drive, never through the repo.
+   Fallback: the plain `webapp/index.html` from the repository works the same
+   but needs the master sheet dropped each time and cannot show the rows whose
+   ID cell is blank.
 2. Optional, only needed for the automatic downloader: confirm Python 3 is
    present (`python3 --version` or `py --version`).
 
@@ -25,10 +31,17 @@ names (a stray space, a dash, a missing county code) still line up.
 
 ## Step 2: mark timing in the master sheet
 
-Open the **mark timing** tab. Each row is a signal whose timing file is already
-in SharePoint but whose master row does not say so yet. For each one, put the
-timing note in the master sheet's timing column at the row shown. Use **Copy ID
-and row list** to paste them in quickly.
+Open the **sheet column** tab. It shows the master sheet's "Timing & key
+updated to sharepoint" column for every row: what the people before already
+wrote is locked on the left and always survives into the output. Where the
+cell is blank but a timing file exists in SharePoint, the output autofills
+"timing (was already in sharepoint)". Click **Copy the whole column** and
+paste it over the sheet column starting at row 2; the copy is row aligned,
+one line per sheet row. A cell can be force edited when you are certain, and
+the edit is shown in red against the struck through original.
+
+The older **mark timing** tab still lists the same signals one by one if you
+would rather type them in by hand.
 
 ## Step 3: download the missing databases
 
@@ -56,13 +69,21 @@ timing database. Open it and decide by hand before downloading a new one.
 Open the **anomalies** tab and handle each group:
 
 - **Nonstandard names**: matched by ID but worth retitling to `CCC_IDID_name`.
-- **County prefix disagrees**: the three digit prefix does not match the master.
+- **County prefix disagrees**: blocking TODO. The task is not complete until
+  each one is checked by hand and ticked off in its card. If the master is
+  wrong, tell the supervisor; if the file title is wrong, retitle it; if the
+  downloaded database is for a different intersection, stop and raise it.
 - **Subsystem files (ICWS, AWF)**: not timing databases, left as is.
 - **No recognizable ID**: rename so the ID is present, or set aside.
-- **Linked signals missing from the master**: before adding a row, search the
-  master for that intersection in case the row exists with the ID left blank.
-- **Duplicate ID rows in the master**: compare the two rows (shown side by side)
-  and keep the correct one; flag rather than delete unless you are sure.
+- **Linked signals missing from the master**: the tool guesses the sheet row
+  from the street names (many rows exist with the ID left blank). Click
+  **It's this row** on the right guess, verify the intersection by hand, then
+  **Copy ID assignments** to type the IDs into the sheet. A guess that lands
+  on a row already carrying a different ID usually means that ID is a typo in
+  the sheet; check before changing it.
+- **Duplicate ID rows in the master**: shown side by side with differences
+  highlighted. Pick **Keep this row** or flag for the supervisor and add a
+  note; nothing is deleted, the picks are a worklist for editing the sheet.
 
 ## Step 5: box check (on hold until port access)
 
