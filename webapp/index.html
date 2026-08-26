@@ -89,6 +89,7 @@
   .linkcard { margin-bottom: 10px; }
   .linkcard .cand { display: flex; gap: 10px; align-items: baseline;
     padding: 5px 0; border-top: 1px dashed var(--line); }
+  .linkcard.unsure { border-color: var(--bad); background: #fdf3f2; }
   .linkcard .cand .sc { color: var(--muted);
     font: 11px ui-monospace, Consolas, monospace; min-width: 34px; }
   .linked { color: var(--ok); font-weight: 600; }
@@ -174,7 +175,7 @@
 
 <script>
 "use strict";
-const BUILD = "v1.7.1, built 2026-08-26";
+const BUILD = "v1.8.0, built 2026-08-26";
 document.getElementById("stamp").textContent =
   "MaxTime Timing Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -640,6 +641,60 @@ function autoApplyVerdicts() {
     }
   }
   if (changed) store.set("linkAssign", state.linkAssign);
+  /* duplicate ID groups: maxtime is the truth for who keeps the id. Exact
+     duplicate rows keep the earlier row; otherwise the single row matching
+     maxtime's own intersection for that id keeps it. */
+  let dchanged = false;
+  for (const [id, rows2] of dupGroups()) {
+    if (state.dupResolve[id] !== undefined) continue;
+    let keep = null;
+    if (new Set(rows2.map(m => pairKey(m.s1, m.s2))).size === 1)
+      keep = Math.min(...rows2.map(m => m.row));
+    else if (state.links[id]) {
+      const hits = rows2.filter(m =>
+        guessScore(state.links[id], m) >= TYPO_SURE);
+      if (hits.length === 1) keep = hits[0].row;
+    }
+    if (keep != null) {
+      state.dupResolve[id] = { keep, auto: true };
+      dchanged = true;
+    }
+  }
+  if (dchanged) store.set("dupResolve", state.dupResolve);
+}
+
+function dupGroups() {
+  const master = effectiveMaster() || [];
+  const byId = {};
+  for (const m of master)
+    if (S(m.id)) (byId[m.id] = byId[m.id] || []).push(m);
+  return Object.entries(byId).filter(([, v]) => v.length > 1);
+}
+
+/* Column notes produced by duplicate row decisions. A kept row is treated
+   normally (download, mark timing); the other rows get notes. A row whose ID
+   the linker already corrected keeps that correction note instead. */
+function dupNotes() {
+  const map = {};
+  for (const [id, rows2] of dupGroups()) {
+    const res = state.dupResolve[id] || {};
+    if (res.keep) {
+      const k = rows2.find(m => m.row === res.keep);
+      if (!k) continue;
+      for (const m of rows2) {
+        if (m.row === res.keep) continue;
+        map[m.row] = pairKey(m.s1, m.s2) === pairKey(k.s1, k.s2)
+          ? `INTERN: DELETE THIS ROW, exact duplicate of row ${res.keep}`
+          : `INTERN: duplicate id with row ${res.keep}; this row's real id unknown`;
+      }
+    } else if (res.flag) {
+      for (const m of rows2)
+        map[m.row] = `INTERN: UNSURE, id ${id} duplicated on rows `
+          + rows2.map(r => r.row).join(" and ")
+          + `, could not determine which is right`;
+    }
+  }
+  return map;
 }
 
 /* ---------- state ---------- */
@@ -870,6 +925,7 @@ function computeColumn() {
   const linkedByRow = {};
   for (const [sid, v] of Object.entries(state.linkAssign))
     if (v && v.row != null) linkedByRow[v.row] = { sid, ok: !!v.ok };
+  const dnotes = dupNotes();
   return rows.map(r => {
     const base = S(r.status);
     const ln = linkedByRow[r.row] || null;
@@ -892,6 +948,9 @@ function computeColumn() {
           + (oldId in state.links ? "" : ` (${oldId} not in maxtime)`)
           + `, verify`;
       out = out ? out + "; " + note : note;
+      if (kind === "blank") kind = "auto";
+    } else if (dnotes[r.row]) {
+      out = out ? out + "; " + dnotes[r.row] : dnotes[r.row];
       if (kind === "blank") kind = "auto";
     }
     const conflict = !!(base && classifyStatus(base) === "todo"
@@ -1421,6 +1480,12 @@ function renderPanel() {
                    fix; nothing is written until you do, and the note it
                    writes flags the change as the intern's for
                    verification.</div>`));
+        } else if (asg && asg.unsure) {
+          body = `<div class="cand"><span class="idwarn"><b>NOT SURE:</b>
+            flagged in red to go over with the supervisor. If there end up
+            being many, Copy ID assignments lists them as UNSURE for the
+            sheet.</span>
+            <button class="mini" data-clearlink="${h(x.id)}">undo</button></div>`;
         } else if (asg && asg.missing) {
           body = `<div class="cand"><span class="warnnote">Marked: not in the
             sheet. A prefilled new row now sits at the bottom of the sheet
@@ -1440,10 +1505,13 @@ function renderPanel() {
             || `<div class="cand"><span class="warnnote">no plausible row
                found in the sheet</span></div>`) +
             `<div class="cand"><button data-newrow="${h(x.id)}">Not in the
-              sheet, needs a new row</button></div>`;
+              sheet, needs a new row</button>
+            <button data-unsure="${h(x.id)}">Not sure, flag for the
+              supervisor</button></div>`;
         }
-        return `<div class="card linkcard">
-          <span class="chip">${h(x.id)}</span> <b>${h(x.county)}</b>
+        return `<div class="card linkcard${asg && asg.unsure ? " unsure" : ""}">
+          <span class="chip">${h(x.id)}</span>${asg && asg.unsure
+            ? `<span class="tag t-over">not sure</span>` : ""} <b>${h(x.county)}</b>
           &nbsp;${h(x.main)} @ ${h(x.side)}${verdict}${body}</div>`;
       }).join("");
       return `<div class="anom">
@@ -1477,9 +1545,39 @@ function renderPanel() {
         ["s1", "Street 1"], ["s2", "Street 2"], ["status", "Timing column"],
         ["detection", "Detection"], ["box_fr", "Box or FR"],
         ["box_done", "Box verified"]];
+      const appliedByRow = {};
+      for (const [sid2, v2] of Object.entries(state.linkAssign))
+        if (v2 && v2.row != null && v2.ok) appliedByRow[v2.row] = sid2;
       const cards = a.master_dup_ids.map(d => {
         const rows2 = byId[d.id] || [];
         const res = state.dupResolve[d.id] || {};
+        const lk2 = state.links[d.id];
+        const exactGroup =
+          new Set(rows2.map(m2 => pairKey(m2.s1, m2.s2))).size === 1;
+        const hits = lk2
+          ? rows2.filter(m2 => guessScore(lk2, m2) >= TYPO_SURE) : [];
+        const others = rows2.filter(m2 => m2.row !== res.keep);
+        const otherIds = others.map(m2 => appliedByRow[m2.row]
+          ? `row ${m2.row}'s real id looks like ${h(appliedByRow[m2.row])},
+             already applied in the missing signals list`
+          : `row ${m2.row}'s real id stays unknown`).join("; ");
+        const verdict = exactGroup
+          ? `<div class="verdict">Exact duplicates: every street field is
+             identical text. The earlier row keeps the id; the later row's
+             column gets an all caps DELETE THIS ROW note.</div>`
+          : (lk2 && hits.length === 1
+            ? `<div class="verdict">maxtime says ${h(d.id)} is
+               ${h(lk2.main)} @ ${h(lk2.side)}, which matches row
+               ${hits[0].row} only: that row keeps the id.
+               ${res.keep ? otherIds + "." : ""} Ground truth if in doubt:
+               download the id's database, its title names the
+               intersection.</div>`
+            : (lk2
+              ? `<div class="verdict" style="border-color:var(--warn)">
+                 maxtime says ${h(d.id)} is ${h(lk2.main)} @ ${h(lk2.side)},
+                 which does not single out one row. Download the id's
+                 database and check its title, or flag UNSURE.</div>`
+              : ""));
         const differs = f =>
           new Set(rows2.map(m2 => S(m2[f]).toLowerCase())).size > 1;
         const cell = (m2, f) => {
@@ -1490,10 +1588,12 @@ function renderPanel() {
         };
         return `<div class="card" style="margin-bottom:12px">
           <b>ID ${h(d.id)} appears on ${rows2.length} rows</b>
-          ${res.flag ? `<span class="tag t-over">flagged for supervisor</span>` : ""}
+          ${res.flag ? `<span class="tag t-over">UNSURE, for supervisor</span>` : ""}
+          ${verdict}
           <div style="overflow:auto"><table class="duptable"><thead><tr><th></th>
           ${rows2.map(m2 => `<th class="${res.keep === m2.row ? "keep" : ""}">
-            Row ${m2.row}${res.keep === m2.row ? " (keeping)" : ""}</th>`).join("")}
+            Row ${m2.row}${res.keep === m2.row
+              ? (res.auto ? " (keeping, auto)" : " (keeping)") : ""}</th>`).join("")}
           </tr></thead><tbody>
           ${FIELDS.map(([f, label]) => `<tr><th>${label}</th>
             ${rows2.map(m2 => cell(m2, f)).join("")}</tr>`).join("")}
@@ -1503,8 +1603,8 @@ function renderPanel() {
             </button></td>`).join("")}</tr>
           </tbody></table></div>
           <button class="mini" data-dupflag="${h(d.id)}">${res.flag
-            ? "flagged for the supervisor, click to unflag"
-            : "unsure, flag for the supervisor"}</button>
+            ? "UNSURE is written on these rows; click to withdraw it"
+            : "unsure, flag for the supervisor (writes UNSURE on both rows)"}</button>
           <input class="notebox" type="text" data-dupnote="${h(d.id)}"
             placeholder="notes: what differs, which one you trust"
             value="${h(res.note || "")}">
@@ -1517,9 +1617,16 @@ function renderPanel() {
         <h3>Duplicate ID rows inside the master sheet
           (${a.master_dup_ids.length}, ${decided} decided)</h3>
         <p class="exp">The same ID appears on more than one master row, shown
-        side by side with the differences highlighted. Pick the row to keep,
-        or flag it for the supervisor if it is not obvious. Nothing is deleted
-        here: your picks and notes are a worklist for editing the sheet.</p>
+        side by side with differences highlighted. Where maxtime's own
+        intersection for the id singles out one row, or the rows are exact
+        text duplicates, the keep is applied automatically (undo sticks). The
+        kept row is treated normally everywhere: it joins the download pile
+        and gets marked timing. The other row's column gets an INTERN note
+        (duplicate id, DELETE THIS ROW for exact copies, or its corrected id
+        if the missing signals list already found it). If nothing settles it,
+        flag UNSURE for the supervisor. Ground truth: download the id's
+        database, its title names the intersection. Nothing is deleted here;
+        everything lands as notes in the sheet column copies.</p>
         <div class="bar"><button id="btnCopyDupRes">Copy decisions</button></div>
         ${cards}</div>`;
     })();
@@ -1553,7 +1660,7 @@ function renderPanel() {
     p.onclick = ev => {
       const b = ev.target.closest(
         "[data-pick],[data-newrow],[data-clearlink],[data-confirm],"
-        + "[data-keep],[data-dupflag]");
+        + "[data-unsure],[data-keep],[data-dupflag]");
       if (!b) return;
       if (b.dataset.pick) {
         state.linkAssign[b.dataset.pick] = { row: +b.dataset.row };
@@ -1564,6 +1671,9 @@ function renderPanel() {
         const cur = state.linkAssign[b.dataset.confirm];
         if (cur) { cur.ok = true; store.set("linkAssign", state.linkAssign); }
         toast("Applied: the INTERN note and the ID fix are in the copies now");
+      } else if (b.dataset.unsure) {
+        state.linkAssign[b.dataset.unsure] = { unsure: true };
+        store.set("linkAssign", state.linkAssign);
       } else if (b.dataset.newrow) {
         state.linkAssign[b.dataset.newrow] = { missing: true };
         store.set("linkAssign", state.linkAssign);
@@ -1575,8 +1685,13 @@ function renderPanel() {
         toast("Undone. It will not reapply itself; the buttons below can.");
       } else if (b.dataset.keep) {
         const cur = state.dupResolve[b.dataset.keep] || {};
-        cur.keep = cur.keep === +b.dataset.row ? null : +b.dataset.row;
-        state.dupResolve[b.dataset.keep] = cur;
+        if (cur.keep === +b.dataset.row) {
+          /* tombstone so an undone auto keep stays undone */
+          state.dupResolve[b.dataset.keep] = { dismissed: true };
+        } else {
+          cur.keep = +b.dataset.row; cur.auto = false;
+          state.dupResolve[b.dataset.keep] = cur;
+        }
         store.set("dupResolve", state.dupResolve);
       } else if (b.dataset.dupflag) {
         const cur = state.dupResolve[b.dataset.dupflag] || {};
@@ -1614,6 +1729,9 @@ function renderPanel() {
         if (asg && asg.row != null) rowsOut.push([asg.row, x.id]);
         else if (asg && asg.missing)
           newsOut.push("NEW\t" + x.id + "\t" + (x.county || "") + "\t"
+            + (x.main || "") + " @ " + (x.side || ""));
+        else if (asg && asg.unsure)
+          newsOut.push("UNSURE\t" + x.id + "\t" + (x.county || "") + "\t"
             + (x.main || "") + " @ " + (x.side || ""));
       }
       rowsOut.sort((p1, p2) => p1[0] - p2[0]);
