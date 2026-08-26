@@ -174,7 +174,7 @@
 
 <script>
 "use strict";
-const BUILD = "v1.7.0, built 2026-08-26";
+const BUILD = "v1.7.1, built 2026-08-26";
 document.getElementById("stamp").textContent =
   "MaxTime Timing Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -368,7 +368,11 @@ function parseMaster(rows) {
   const out = [];
   for (const [rownum, r] of rows.slice(1)) {
     const sid = S(r[c.id]);
-    if (!sid) continue;
+    /* keep blank ID rows that carry content: they are real intersections the
+       row linker must be able to suggest; analyze() skips them for
+       everything keyed by ID */
+    if (!sid && !(S(r[c.county]) || S(r[c.s1]) || S(r[c.s2]) || S(r[c.ab])))
+      continue;
     out.push({ row: rownum, id: sid, county: S(r[c.county]), county_id: S(r[c.cid]),
       s1: S(r[c.s1]), s2: S(r[c.s2]), status: S(r[c.ab]),
       detection: S(r[c.det]), box_fr: S(r[c.boxfr]), box_done: S(r[c.boxdone]) });
@@ -425,6 +429,7 @@ function analyze(links, master, filenames) {
 
   const masterById = {}, masterRowsById = {};
   for (const m of master) {
+    if (!m.id) continue;  // blank ID rows exist only for the row linker
     (masterRowsById[m.id] = masterRowsById[m.id] || []).push(m);
     if (!(m.id in masterById)) masterById[m.id] = m;
   }

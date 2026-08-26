@@ -109,7 +109,12 @@ def _find_box_done_col(header):
 
 def parse_master(path):
     """List of master rows: {row, id, county, county_id, s1, s2, status,
-    detection, box_fr, box_done}."""
+    detection, box_fr, box_done}.
+
+    Rows whose ID cell is blank are kept when they carry content: they are
+    real intersections (the expected home of a linked signal missing from
+    the master) and the row linker must be able to suggest them. analyze()
+    ignores them for everything keyed by ID."""
     rows = read_sheet(path, "MASTER SIGNAL LIST")
     header = rows[0][1]
     c_id = _find_col(header, exact="ID#")
@@ -124,7 +129,8 @@ def parse_master(path):
     out = []
     for rownum, r in rows[1:]:
         sid = str(r.get(c_id, "")).strip()
-        if not sid:
+        if not sid and not any(str(r.get(c, "")).strip()
+                               for c in (c_county, c_s1, c_s2, c_ab)):
             continue
         out.append({
             "row": rownum,
@@ -401,6 +407,8 @@ def analyze(links, master, filenames):
 
     master_by_id, master_rows_by_id = {}, {}
     for m in master:
+        if not m["id"]:
+            continue  # blank ID rows exist only for the row linker
         master_rows_by_id.setdefault(m["id"], []).append(m)
         if m["id"] not in master_by_id:
             master_by_id[m["id"]] = m
