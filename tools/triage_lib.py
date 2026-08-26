@@ -287,6 +287,47 @@ def guess_rows(lk, rows):
     return scored[:4]
 
 
+def _canon(s):
+    return re.sub(r"[^A-Z0-9]+", "", str(s or "").upper())
+
+
+def _pair_key(a, b):
+    return "|".join(sorted([_canon(a), _canon(b)]))
+
+
+def det_verdicts(links, master_rows):
+    """All deterministic verdicts for linked signals missing from the master.
+
+    kind 'exact': exactly one master row, with a blank ID, whose street pair
+    is identical to the link's ignoring case, spacing, punctuation, and
+    order. kinds 'duplicate' and 'unknown id' come from suspect_id_typos.
+    Each master row is used at most once. {missing_id: {kind, row, wrong_id,
+    partner_row}}."""
+    present = {str(m.get("id", "")).strip() for m in master_rows
+               if str(m.get("id", "")).strip()}
+    by_pair = {}
+    for m in master_rows:
+        by_pair.setdefault(_pair_key(m["s1"], m["s2"]), []).append(m)
+    out, taken = {}, set()
+    for x in sorted(links, key=lambda s: (len(s), s)):
+        if x in present:
+            continue
+        cands = by_pair.get(_pair_key(links[x]["main"], links[x]["side"]), [])
+        blanks = [m for m in cands
+                  if not str(m.get("id", "")).strip() and m["row"] not in taken]
+        if len(blanks) == 1:
+            out[x] = {"kind": "exact", "row": blanks[0]["row"],
+                      "wrong_id": None, "partner_row": None}
+            taken.add(blanks[0]["row"])
+    for x, d in suspect_id_typos(links, master_rows).items():
+        if x not in out and d["row"] not in taken:
+            out[x] = {"kind": d["why"], "row": d["row"],
+                      "wrong_id": d["wrong_id"],
+                      "partner_row": d["partner_row"]}
+            taken.add(d["row"])
+    return out
+
+
 # A guess is treated as near certain only at or above this score, which in
 # practice means the route numbers, the county, and most street words agree.
 TYPO_SURE = 1.0

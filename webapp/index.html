@@ -157,7 +157,9 @@
       duplicated, and which master rows should be marked timing. It only ever reads:
       it never edits a sheet, a file, or a controller.</p>
       <p class="privacy">Everything runs in this browser tab. File contents and names
-      stay on this computer; progress checkmarks are kept in this browser only.</p>
+      stay on this computer. Close and reopen anytime: checkmarks, applied
+      fixes, notes, and new rows are saved in this browser on this computer
+      and come back on their own. Only "Clear saved data" above removes them.</p>
     </div>
   </div>
 
@@ -172,7 +174,7 @@
 
 <script>
 "use strict";
-const BUILD = "v1.6.0, built 2026-08-26";
+const BUILD = "v1.7.0, built 2026-08-26";
 document.getElementById("stamp").textContent =
   "MaxTime Timing Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -584,6 +586,57 @@ function suspectTypos(links, rows) {
   return out;
 }
 
+/* All deterministic verdicts, mirrors triage_lib.det_verdicts. kind "exact":
+   exactly one master row, with a blank ID, whose street pair is identical to
+   the link's ignoring case, spacing, punctuation, and order. kinds
+   "duplicate" and "unknown id" come from suspectTypos. Each master row is
+   used at most once. */
+const canonName = s => S(s).toUpperCase().replace(/[^A-Z0-9]+/g, "");
+const pairKey = (a, b) => [canonName(a), canonName(b)].sort().join("|");
+
+function detVerdicts(links, rows) {
+  const present = new Set(rows.map(m => S(m.id)).filter(Boolean));
+  const byPair = {};
+  for (const m of rows)
+    (byPair[pairKey(m.s1, m.s2)] = byPair[pairKey(m.s1, m.s2)] || []).push(m);
+  const out = {}, taken = new Set();
+  for (const x of Object.keys(links).sort(idCmp)) {
+    if (present.has(x)) continue;
+    const cands = byPair[pairKey(links[x].main, links[x].side)] || [];
+    const blanks = cands.filter(m => !S(m.id) && !taken.has(m.row));
+    if (blanks.length === 1) {
+      out[x] = { kind: "exact", row: blanks[0].row,
+        wrong_id: null, partner_row: null };
+      taken.add(blanks[0].row);
+    }
+  }
+  for (const [x, d] of Object.entries(suspectTypos(links, rows))) {
+    if (!(x in out) && !taken.has(d.row)) {
+      out[x] = { kind: d.why, row: d.row, wrong_id: d.wrong_id,
+        partner_row: d.partner_row };
+      taken.add(d.row);
+    }
+  }
+  return out;
+}
+
+/* Every deterministic verdict starts out applied (with its INTERN note and
+   ID fix live in the copies) so the obvious cases need no clicking; undo on
+   a card withdraws it and it stays withdrawn. */
+function autoApplyVerdicts() {
+  if (!state.links) return;
+  const rows = baselineRows();
+  if (!rows.length) return;
+  let changed = false;
+  for (const [sid, d] of Object.entries(detVerdicts(state.links, rows))) {
+    if (state.linkAssign[sid] === undefined) {
+      state.linkAssign[sid] = { row: d.row, ok: true, auto: true };
+      changed = true;
+    }
+  }
+  if (changed) store.set("linkAssign", state.linkAssign);
+}
+
 /* ---------- state ---------- */
 const store = {
   get(k, d) { try { const v = localStorage.getItem("mtt." + k);
@@ -782,6 +835,7 @@ function refresh() {
   document.getElementById("results").style.display = ready ? "" : "none";
   document.getElementById("placeholder").style.display = ready ? "none" : "";
   if (!ready) { result = null; window.__triage = null; return; }
+  autoApplyVerdicts();
   result = analyze(state.links, master, state.listing);
   /* rows created by "not in the sheet, needs a new row" join the analyzed
      master, so those signals take part in needs download, coverage, autofill,
@@ -1309,32 +1363,44 @@ function renderPanel() {
       .sort((p, q) => idCmp(p.id, q.id));
     const linkSec = !linkList.length ? "" : (() => {
       const allRows = baselineRows();
-      const suspects = suspectTypos(state.links, allRows);
-      const linkedCount = linkList
-        .filter(x => state.linkAssign[x.id]).length;
+      const verdicts = detVerdicts(state.links, allRows);
+      const linkedCount = linkList.filter(x => {
+        const asg2 = state.linkAssign[x.id];
+        return asg2 && !asg2.dismissed;
+      }).length;
       const items = linkList.map(x => {
         const lk = state.links[x.id] || { county: x.county, main: x.main,
           side: x.side };
         const asg = state.linkAssign[x.id];
-        const sv = suspects[x.id];
-        const verdict = sv ? `<div class="verdict">Deterministic check: row
-          ${sv.row} carries ID ${h(sv.wrong_id)}, which looks mistyped for
-          ${h(x.id)}. ${sv.why === "duplicate"
-            ? `${h(sv.wrong_id)} sits on more than one row, and its own
-               maxtime intersection matches row ${sv.partner_row} instead.`
-            : `${h(sv.wrong_id)} exists nowhere in maxtime.`}</div>` : "";
+        const sv = verdicts[x.id];
+        const verdict = !sv ? ""
+          : sv.kind === "exact"
+            ? `<div class="verdict">Deterministic check: row ${sv.row}'s
+              Street 1 @ Street 2 is exactly this intersection (identical
+              text, only spacing or punctuation differs) and that row has no
+              ID.</div>`
+            : `<div class="verdict">Deterministic check: row
+              ${sv.row} carries ID ${h(sv.wrong_id)}, which looks mistyped for
+              ${h(x.id)}. ${sv.kind === "duplicate"
+                ? `${h(sv.wrong_id)} sits on more than one row, and its own
+                   maxtime intersection matches row ${sv.partner_row} instead.`
+                : `${h(sv.wrong_id)} exists nowhere in maxtime.`}</div>`;
         let body;
         if (asg && asg.row != null) {
           const m = allRows.find(rr => rr.row === asg.row) || {};
           body = `<div class="cand"><span class="linked">Linked to sheet row
             ${asg.row}: ${h(m.county)} ${h(m.s1)} @ ${h(m.s2)}</span>
             ${asg.ok
-              ? `<span class="tag t-auto">fix applied</span>`
+              ? `<span class="tag t-auto">${asg.auto ? "auto applied"
+                  : "fix applied"}</span>`
               : `<button data-confirm="${h(x.id)}">Confident, apply the
                  fix</button>`}
-            <button class="mini" data-clearlink="${h(x.id)}">clear</button></div>` +
+            <button class="mini" data-clearlink="${h(x.id)}">undo</button></div>` +
             (asg.ok
-              ? `<div style="color:var(--ok);font-size:12px">Applied: row
+              ? `<div style="color:var(--ok);font-size:12px">${asg.auto
+                 ? "Applied automatically from the deterministic check;"
+                   + " undo withdraws it and it stays withdrawn. Row"
+                 : "Applied: row"}
                  ${asg.row}'s column text gets an INTERN note flagging the
                  change for verification${
                  S(m.id) && S(m.id) !== x.id
@@ -1355,7 +1421,7 @@ function renderPanel() {
             sheet. A prefilled new row now sits at the bottom of the sheet
             column tab (Copy new rows includes it), and the signal counts in
             every tab as if that row had always existed.</span>
-            <button class="mini" data-clearlink="${h(x.id)}">clear</button></div>`;
+            <button class="mini" data-clearlink="${h(x.id)}">undo</button></div>`;
         } else {
           const gs = guessRows(lk, allRows);
           body = (gs.map(g => `<div class="cand">
@@ -1381,13 +1447,15 @@ function renderPanel() {
         <p class="exp">Each has a MaxTime link but no master row with its ID.
         The rows below are the tool's best guesses from the street names,
         best first; many sheet rows exist with the ID left blank, and a blue
-        box marks a near certain mistyped ID found deterministically from the
-        two sheets. When the evidence convinces you (the blue box, the guess
-        scores, or checking the row's Latitude and Longitude or the
-        controller page), click the matching row and then "Confident, apply
-        the fix". Only that click puts an INTERN note into the sheet column
-        and the ID fix into the ID column copy, flagged as the intern's
-        change so the supervisor can verify it.</p>
+        box marks a deterministic finding: an identical intersection on a row
+        with no ID, or a near certain mistyped ID. Deterministic findings are
+        applied automatically (INTERN note and ID fix already in the copies);
+        undo any you disagree with, and it stays undone. The rest are guesses
+        only: when the evidence convinces you (the scores, the row's Latitude
+        and Longitude in a map, or the controller page), click the matching
+        row and then "Confident, apply the fix". Nothing from a guess is
+        written before that click, and every written change carries an INTERN
+        note so the supervisor can verify it.</p>
         <div class="bar">
           <button id="btnCopyLinks">Copy ID assignments</button>
           <span class="note">one line per decided signal: the sheet row to
@@ -1495,8 +1563,11 @@ function renderPanel() {
         state.linkAssign[b.dataset.newrow] = { missing: true };
         store.set("linkAssign", state.linkAssign);
       } else if (b.dataset.clearlink) {
-        delete state.linkAssign[b.dataset.clearlink];
+        /* a tombstone, not a delete: an undone verdict must not reapply
+           itself on the next load */
+        state.linkAssign[b.dataset.clearlink] = { dismissed: true };
         store.set("linkAssign", state.linkAssign);
+        toast("Undone. It will not reapply itself; the buttons below can.");
       } else if (b.dataset.keep) {
         const cur = state.dupResolve[b.dataset.keep] || {};
         cur.keep = cur.keep === +b.dataset.row ? null : +b.dataset.row;
