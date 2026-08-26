@@ -783,6 +783,12 @@ function refresh() {
   document.getElementById("placeholder").style.display = ready ? "none" : "";
   if (!ready) { result = null; window.__triage = null; return; }
   result = analyze(state.links, master, state.listing);
+  /* rows created by "not in the sheet, needs a new row" join the analyzed
+     master, so those signals take part in needs download, coverage, autofill,
+     and box check like any row that was always there */
+  const added = newSheetRows();
+  if (added.length)
+    result = analyze(state.links, master.concat(added), state.listing);
   window.__triage = result;
   renderSummary(); renderPanel();
 }
@@ -815,14 +821,17 @@ function computeColumn() {
     const sid = (linked && linkedOk) ? linked : (S(r.id) || null);
     let kind = base ? "kept" : "blank", out = base;
     if (!base && sid && covered.has(sid)) { kind = "auto"; out = AUTO_TEXT; }
-    /* a confirmed link writes a short description of what was wrong into the
-       column, after whatever else the cell says */
+    /* an applied fix writes a short intern flagged description into the
+       column, after whatever else the cell says. INTERN: in caps is the
+       highlight: a pasted text cell cannot carry formatting, but the caps
+       prefix stands out in the sheet and is searchable. */
     if (linked && linkedOk) {
       const oldId = S(r.id);
       const note = !oldId
-        ? `id ${linked} added (row had no id)`
-        : `id corrected from ${oldId} to ${linked}` +
-          (oldId in state.links ? "" : ` (${oldId} not in maxtime)`);
+        ? `INTERN: filled in id ${linked}, row had no id, verify`
+        : `INTERN: id looked mistyped, changed from ${oldId} to ${linked}`
+          + (oldId in state.links ? "" : ` (${oldId} not in maxtime)`)
+          + `, verify`;
       out = out ? out + "; " + note : note;
       if (kind === "blank") kind = "auto";
     }
@@ -863,10 +872,11 @@ function newSheetRows() {
     const lk = state.links[sid];
     if (!lk) continue;
     rowNum++;
-    let note = "added by intern, in maxtime but missing from this sheet";
+    let note = "INTERN: added this row, in maxtime but missing from this sheet";
     if (!needIds.has(sid)) note = AUTO_TEXT + "; " + note;
     out.push({ row: rowNum, id: sid, county: lk.county,
-      county_id: cidOf(lk.county), s1: lk.main, s2: lk.side, status: note });
+      county_id: cidOf(lk.county), s1: lk.main, s2: lk.side, status: note,
+      detection: "", box_fr: "", box_done: "" });
   }
   return out;
 }
@@ -1285,13 +1295,24 @@ function renderPanel() {
         }).join("") + `</div>`;
     })();
 
-    /* linker: signals with a MaxTime link but no master row */
-    const linkSec = !a.links_not_in_master.length ? "" : (() => {
+    /* linker: signals with a MaxTime link but no master row. Signals already
+       marked "needs a new row" leave links_not_in_master (their new row now
+       counts as master), so they are re listed here to stay visible and
+       clearable. */
+    const missingMarked = Object.keys(state.linkAssign)
+      .filter(sid => state.linkAssign[sid] && state.linkAssign[sid].missing
+        && state.links && state.links[sid]
+        && !a.links_not_in_master.some(x => x.id === sid))
+      .map(sid => ({ id: sid, county: state.links[sid].county,
+        main: state.links[sid].main, side: state.links[sid].side }));
+    const linkList = a.links_not_in_master.concat(missingMarked)
+      .sort((p, q) => idCmp(p.id, q.id));
+    const linkSec = !linkList.length ? "" : (() => {
       const allRows = baselineRows();
       const suspects = suspectTypos(state.links, allRows);
-      const linkedCount = a.links_not_in_master
+      const linkedCount = linkList
         .filter(x => state.linkAssign[x.id]).length;
-      const items = a.links_not_in_master.map(x => {
+      const items = linkList.map(x => {
         const lk = state.links[x.id] || { county: x.county, main: x.main,
           side: x.side };
         const asg = state.linkAssign[x.id];
@@ -1308,28 +1329,32 @@ function renderPanel() {
           body = `<div class="cand"><span class="linked">Linked to sheet row
             ${asg.row}: ${h(m.county)} ${h(m.s1)} @ ${h(m.s2)}</span>
             ${asg.ok
-              ? `<span class="tag t-auto">sorted out</span>`
-              : `<button data-confirm="${h(x.id)}">I have sorted it
-                 out</button>`}
+              ? `<span class="tag t-auto">fix applied</span>`
+              : `<button data-confirm="${h(x.id)}">Confident, apply the
+                 fix</button>`}
             <button class="mini" data-clearlink="${h(x.id)}">clear</button></div>` +
             (asg.ok
-              ? `<div style="color:var(--ok);font-size:12px">Confirmed: the
-                 sheet column gets a short note on row ${asg.row}${
+              ? `<div style="color:var(--ok);font-size:12px">Applied: row
+                 ${asg.row}'s column text gets an INTERN note flagging the
+                 change for verification${
                  S(m.id) && S(m.id) !== x.id
                    ? `, and the ID column copy writes ${h(x.id)} there in
                       place of ${h(m.id)}`
                    : `, and the ID column copy fills in ${h(x.id)} there`}.</div>`
               : (S(m.id) && S(m.id) !== x.id
                 ? `<div class="idwarn">That row still carries ID ${h(m.id)}.
-                   Verify by hand (coordinates or the controller page), then
-                   click sorted out; nothing is written until you do.</div>`
-                : `<div class="warnnote">Verify the intersection by hand,
-                   then click sorted out; nothing is written until you
-                   do.</div>`));
+                   If the evidence above convinces you, apply the fix;
+                   nothing is written until you do, and the note it writes
+                   flags the change as the intern's for verification.</div>`
+                : `<div class="warnnote">If this is the right row, apply the
+                   fix; nothing is written until you do, and the note it
+                   writes flags the change as the intern's for
+                   verification.</div>`));
         } else if (asg && asg.missing) {
           body = `<div class="cand"><span class="warnnote">Marked: not in the
             sheet. A prefilled new row now sits at the bottom of the sheet
-            column tab, included in its Copy new rows button.</span>
+            column tab (Copy new rows includes it), and the signal counts in
+            every tab as if that row had always existed.</span>
             <button class="mini" data-clearlink="${h(x.id)}">clear</button></div>`;
         } else {
           const gs = guessRows(lk, allRows);
@@ -1352,15 +1377,17 @@ function renderPanel() {
       }).join("");
       return `<div class="anom">
         <h3>Linked signals missing from the master sheet
-          (${a.links_not_in_master.length}, ${linkedCount} decided)</h3>
+          (${linkList.length}, ${linkedCount} decided)</h3>
         <p class="exp">Each has a MaxTime link but no master row with its ID.
         The rows below are the tool's best guesses from the street names,
         best first; many sheet rows exist with the ID left blank, and a blue
         box marks a near certain mistyped ID found deterministically from the
-        two sheets. Click the matching row, verify by hand (the sheet's
-        Latitude and Longitude in a map, or the controller's own page), then
-        click "I have sorted it out". Only that click puts the note into the
-        sheet column and the ID fix into the ID column copy.</p>
+        two sheets. When the evidence convinces you (the blue box, the guess
+        scores, or checking the row's Latitude and Longitude or the
+        controller page), click the matching row and then "Confident, apply
+        the fix". Only that click puts an INTERN note into the sheet column
+        and the ID fix into the ID column copy, flagged as the intern's
+        change so the supervisor can verify it.</p>
         <div class="bar">
           <button id="btnCopyLinks">Copy ID assignments</button>
           <span class="note">one line per decided signal: the sheet row to
@@ -1459,11 +1486,11 @@ function renderPanel() {
         state.linkAssign[b.dataset.pick] = { row: +b.dataset.row };
         store.set("linkAssign", state.linkAssign);
         toast("Linked " + b.dataset.pick + " to row " + b.dataset.row
-          + ". Check it by hand, then click sorted out.");
+          + ". Apply the fix when you are confident.");
       } else if (b.dataset.confirm) {
         const cur = state.linkAssign[b.dataset.confirm];
         if (cur) { cur.ok = true; store.set("linkAssign", state.linkAssign); }
-        toast("Sorted out: the note and the ID fix are in the copies now");
+        toast("Applied: the INTERN note and the ID fix are in the copies now");
       } else if (b.dataset.newrow) {
         state.linkAssign[b.dataset.newrow] = { missing: true };
         store.set("linkAssign", state.linkAssign);
@@ -1506,7 +1533,7 @@ function renderPanel() {
     const bl = document.getElementById("btnCopyLinks");
     if (bl) bl.onclick = () => {
       const rowsOut = [], newsOut = [];
-      for (const x of a.links_not_in_master) {
+      for (const x of linkList) {
         const asg = state.linkAssign[x.id];
         if (asg && asg.row != null) rowsOut.push([asg.row, x.id]);
         else if (asg && asg.missing)
