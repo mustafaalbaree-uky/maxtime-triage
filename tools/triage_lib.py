@@ -287,6 +287,53 @@ def guess_rows(lk, rows):
     return scored[:4]
 
 
+# A guess is treated as near certain only at or above this score, which in
+# practice means the route numbers, the county, and most street words agree.
+TYPO_SURE = 1.0
+
+
+def suspect_id_typos(links, master_rows):
+    """Deterministic check for mistyped IDs in the master sheet.
+
+    For each linked signal X with no master row, if the master row that best
+    matches X's intersection carries a DIFFERENT id Y, suspect that Y is a
+    typo for X when either
+      - Y does not exist in the links sheet at all (the id belongs to no
+        known controller), or
+      - Y is duplicated in the master and one of the OTHER rows carrying Y
+        matches Y's own links intersection, so Y is already spoken for.
+    Returns {missing_id: {row, wrong_id, why, partner_row}}.
+    """
+    by_id = {}
+    for m in master_rows:
+        sid = str(m.get("id", "")).strip()
+        if sid:
+            by_id.setdefault(sid, []).append(m)
+    out = {}
+    for x in links:
+        if x in by_id:
+            continue
+        gs = guess_rows(links[x], master_rows)
+        if not gs or gs[0][0] < TYPO_SURE:
+            continue
+        top = gs[0][1]
+        y = str(top.get("id", "")).strip()
+        if not y or y == x:
+            continue
+        if y not in links:
+            out[x] = {"row": top["row"], "wrong_id": y, "partner_row": None,
+                      "why": "unknown id"}
+            continue
+        others = [m for m in by_id.get(y, []) if m["row"] != top["row"]]
+        if not others:
+            continue
+        partner = max(others, key=lambda m: guess_score(links[y], m))
+        if guess_score(links[y], partner) >= TYPO_SURE:
+            out[x] = {"row": top["row"], "wrong_id": y,
+                      "partner_row": partner["row"], "why": "duplicate"}
+    return out
+
+
 def analyze(links, master, filenames):
     valid_ids = {i for i in links if i.isdigit() and len(i) == 4}
     valid_ids |= {m["id"] for m in master if m["id"].isdigit() and len(m["id"]) == 4}

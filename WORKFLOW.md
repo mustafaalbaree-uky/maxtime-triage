@@ -40,6 +40,13 @@ paste it over the sheet column starting at row 2; the copy is row aligned,
 one line per sheet row. A cell can be force edited when you are certain, and
 the edit is shown in red against the struck through original.
 
+Sorted out ID fixes and new rows appear here too: confirmed fixes add a short
+note to the row's column text and light up **Copy ID column** (paste over the
+ID# column the same row aligned way; unchanged cells are copied exactly as
+they are). Signals marked "not in the sheet" become prefilled rows at the
+bottom, and **Copy new rows** pastes them at column A on the first empty row.
+Do all three pastes on a fresh copy of the sheet the first time.
+
 The older **mark timing** tab still lists the same signals one by one if you
 would rather type them in by hand.
 
@@ -76,11 +83,15 @@ Open the **anomalies** tab and handle each group:
 - **Subsystem files (ICWS, AWF)**: not timing databases, left as is.
 - **No recognizable ID**: rename so the ID is present, or set aside.
 - **Linked signals missing from the master**: the tool guesses the sheet row
-  from the street names (many rows exist with the ID left blank). Click
-  **It's this row** on the right guess, verify the intersection by hand, then
-  **Copy ID assignments** to type the IDs into the sheet. A guess that lands
-  on a row already carrying a different ID usually means that ID is a typo in
-  the sheet; check before changing it.
+  from the street names (many rows exist with the ID left blank), and a blue
+  box flags a near certain mistyped ID found deterministically: the row that
+  matches the missing signal carries an ID that is either duplicated (with
+  the other row matching that ID's own intersection) or unknown to MaxTime.
+  Click **It's this row**, verify by hand (the sheet's Latitude and Longitude
+  in a map, or the controller's own page), then click **I have sorted it
+  out**. Only that click writes anything: a short note into the sheet column
+  and the ID fix into the ID column copy. **Not in the sheet, needs a new
+  row** creates a prefilled row in the sheet column tab instead.
 - **Duplicate ID rows in the master**: shown side by side with differences
   highlighted. Pick **Keep this row** or flag for the supervisor and add a
   note; nothing is deleted, the picks are a worklist for editing the sheet.

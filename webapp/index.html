@@ -93,6 +93,9 @@
     font: 11px ui-monospace, Consolas, monospace; min-width: 34px; }
   .linked { color: var(--ok); font-weight: 600; }
   .idwarn { color: var(--bad); font-size: 12px; }
+  .verdict { background: #e8f0fe; border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0; padding: 6px 10px; font-size: 12.5px;
+    margin: 6px 0; }
   /* duplicate master rows side by side */
   table.duptable { margin: 6px 0 4px; }
   table.duptable td.diff { background: #fff3cd; }
@@ -169,7 +172,7 @@
 
 <script>
 "use strict";
-const BUILD = "v1.5.0, built 2026-08-26";
+const BUILD = "v1.6.0, built 2026-08-26";
 document.getElementById("stamp").textContent =
   "MaxTime Timing Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -392,6 +395,9 @@ function parseListing(filenames, validIds) {
 }
 
 const idCmp = (a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+const colLetter = n => { let s = "";
+  while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s;
+    n = Math.floor((n - 1) / 26); } return s; };
 const byName = (a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 
 function analyze(links, master, filenames) {
@@ -536,6 +542,46 @@ function guessRows(lk, rows) {
   return rows.map(m => ({ m, sc: guessScore(lk, m) }))
     .filter(x => x.sc >= 0.35)
     .sort((x, y) => y.sc - x.sc || x.m.row - y.m.row).slice(0, 4);
+}
+
+/* Deterministic check for mistyped IDs, mirrors triage_lib.suspect_id_typos.
+   A guess counts as near certain only at TYPO_SURE or above (route numbers,
+   county, and most street words agree). Suspect row R's id Y is a typo for
+   missing signal X when R is X's near certain match and either Y exists in
+   no links row at all, or Y is duplicated and another row carrying Y is the
+   near certain match for Y's own links intersection. */
+const TYPO_SURE = 1.0;
+
+function suspectTypos(links, rows) {
+  const byId = {};
+  for (const m of rows) {
+    const sid = S(m.id);
+    if (sid) (byId[sid] = byId[sid] || []).push(m);
+  }
+  const out = {};
+  for (const x of Object.keys(links)) {
+    if (byId[x]) continue;
+    const gs = guessRows(links[x], rows);
+    if (!gs.length || gs[0].sc < TYPO_SURE) continue;
+    const top = gs[0].m, y = S(top.id);
+    if (!y || y === x) continue;
+    if (!(y in links)) {
+      out[x] = { row: top.row, wrong_id: y, partner_row: null,
+        why: "unknown id" };
+      continue;
+    }
+    const others = (byId[y] || []).filter(m => m.row !== top.row);
+    if (!others.length) continue;
+    let partner = others[0], best = -1;
+    for (const m of others) {
+      const sc = guessScore(links[y], m);
+      if (sc > best) { best = sc; partner = m; }
+    }
+    if (best >= TYPO_SURE)
+      out[x] = { row: top.row, wrong_id: y, partner_row: partner.row,
+        why: "duplicate" };
+  }
+  return out;
 }
 
 /* ---------- state ---------- */
@@ -758,28 +804,78 @@ function computeColumn() {
   const covered = new Set(Object.keys(state.links).filter(s => !needIds.has(s)));
   const linkedByRow = {};
   for (const [sid, v] of Object.entries(state.linkAssign))
-    if (v && v.row != null) linkedByRow[v.row] = sid;
+    if (v && v.row != null) linkedByRow[v.row] = { sid, ok: !!v.ok };
   return rows.map(r => {
     const base = S(r.status);
-    const linked = S(r.id) ? null : (linkedByRow[r.row] || null);
-    const sid = S(r.id) || linked;
+    const ln = linkedByRow[r.row] || null;
+    const linked = ln ? ln.sid : null;
+    const linkedOk = !!(ln && ln.ok);
+    /* an unconfirmed pick changes nothing: the row acts on its sheet ID
+       until "I have sorted it out" is clicked */
+    const sid = (linked && linkedOk) ? linked : (S(r.id) || null);
     let kind = base ? "kept" : "blank", out = base;
     if (!base && sid && covered.has(sid)) { kind = "auto"; out = AUTO_TEXT; }
+    /* a confirmed link writes a short description of what was wrong into the
+       column, after whatever else the cell says */
+    if (linked && linkedOk) {
+      const oldId = S(r.id);
+      const note = !oldId
+        ? `id ${linked} added (row had no id)`
+        : `id corrected from ${oldId} to ${linked}` +
+          (oldId in state.links ? "" : ` (${oldId} not in maxtime)`);
+      out = out ? out + "; " + note : note;
+      if (kind === "blank") kind = "auto";
+    }
     const conflict = !!(base && classifyStatus(base) === "todo"
       && sid && covered.has(sid));
     const ov = Object.prototype.hasOwnProperty.call(state.override, r.row)
       ? state.override[r.row] : null;
     if (ov != null) { kind = "override"; out = ov; }
-    return { row: r.row, id: S(r.id), linked, sid, county: r.county,
-      s1: r.s1, s2: r.s2, base, out, kind, conflict };
+    return { row: r.row, id: S(r.id), linked, linkedOk, sid,
+      county: r.county, s1: r.s1, s2: r.s2, base, out, kind, conflict,
+      changed: out !== base };
   });
+}
+
+/* Rows to append below the sheet for signals marked "not in the sheet".
+   Prefilled from the links sheet; CountyID comes from the county's other
+   rows. Only possible with the baked in snapshot (needs true row numbers). */
+function newSheetRows() {
+  if (!BASELINE || !result || !state.links) return [];
+  const needIds = new Set(result.needs_download.map(e => e.id));
+  const cidByCounty = {};
+  for (const r of BASELINE.rows) {
+    const co = S(r.county).toUpperCase(), cid = S(r.county_id);
+    if (co && cid) {
+      cidByCounty[co] = cidByCounty[co] || {};
+      cidByCounty[co][cid] = (cidByCounty[co][cid] || 0) + 1;
+    }
+  }
+  const cidOf = co => {
+    const m = cidByCounty[S(co).toUpperCase()];
+    return m ? Object.keys(m).sort((a, b) => m[b] - m[a])[0] : "";
+  };
+  const out = [];
+  let rowNum = BASELINE.lastRow;
+  for (const sid of Object.keys(state.linkAssign).sort(idCmp)) {
+    const v = state.linkAssign[sid];
+    if (!v || !v.missing) continue;
+    const lk = state.links[sid];
+    if (!lk) continue;
+    rowNum++;
+    let note = "added by intern, in maxtime but missing from this sheet";
+    if (!needIds.has(sid)) note = AUTO_TEXT + "; " + note;
+    out.push({ row: rowNum, id: sid, county: lk.county,
+      county_id: cidOf(lk.county), s1: lk.main, s2: lk.side, status: note });
+  }
+  return out;
 }
 
 function renderSummary() {
   const r = result;
   const doneCount = r.needs_download.filter(e => state.done[e.id]).length;
   const col = computeColumn();
-  const colChanged = col.filter(x => x.kind === "auto" || x.kind === "override").length;
+  const colChanged = col.filter(x => x.changed).length + newSheetRows().length;
   const defs = [
     ["needs", r.needs_download.length, "need download", "n-bad",
       doneCount ? doneCount + " checked off" : "controllers without a file"],
@@ -946,13 +1042,14 @@ function renderPanel() {
         (or the generated copy with the snapshot baked in).</div>`;
       return;
     }
+    const newRows = newSheetRows();
+    const idFixes = col.filter(x => x.linked && x.linkedOk).length;
     const nAuto = col.filter(x => x.kind === "auto").length;
     const nOver = col.filter(x => x.kind === "override").length;
     const nKept = col.filter(x => x.kind === "kept").length;
     const flt = colFilter.trim().toLowerCase();
     const shown = col.filter(x => {
-      if (colChangesOnly && x.kind !== "auto" && x.kind !== "override"
-        && !x.conflict) return false;
+      if (colChangesOnly && !x.changed && !x.conflict) return false;
       if (!flt) return true;
       return [x.id, x.sid, x.county, x.s1, x.s2, x.base, x.out, "row " + x.row]
         .some(v => S(v).toLowerCase().includes(flt));
@@ -972,14 +1069,26 @@ function renderPanel() {
       <div class="bar">
         <button class="primary" id="btnCopyCol">Copy the whole column</button>
         <button id="btnCopyChanges">Copy changed cells only (row and value)</button>
+        ${idFixes && BASELINE
+          ? `<button id="btnCopyIds">Copy ID column (${idFixes} fixes)</button>`
+          : ""}
+        ${newRows.length
+          ? `<button id="btnCopyNew">Copy ${newRows.length} new rows</button>`
+          : ""}
         <input class="filter" id="colFilter" placeholder="filter rows"
           value="${h(colFilter)}">
         <label style="font-size:12.5px;color:var(--muted)">
           <input type="checkbox" id="colChanges" ${colChangesOnly ? "checked" : ""}>
           changes only</label>
         <span class="note">${nKept} already filled, ${nAuto} autofilled,
-        ${nOver} forced. Paste the full column over the sheet column starting
-        at row ${BASELINE ? BASELINE.firstRow : 2}.</span>
+        ${nOver} forced. Timing column pastes at
+        ${BASELINE && BASELINE.cols ? "cell "
+          + colLetter(BASELINE.cols.status) + BASELINE.firstRow
+          : "its column, row 2"}. The ID column pastes over the ID# column the
+        same way; unchanged cells are copied exactly as they are, so the paste
+        only alters the fixes. New rows paste at cell
+        A${BASELINE ? BASELINE.lastRow + 1 : ""}. Do it on a fresh copy of the
+        sheet the first time.</span>
       </div>
       <table><thead><tr><th>Sheet row</th><th>ID</th><th>County</th>
       <th>Intersection</th><th>Already in the sheet</th>
@@ -1008,21 +1117,39 @@ function renderPanel() {
         } else {
           outCell = (x.out ? h(x.out)
             : `<span style="color:var(--muted)">(blank)</span>`)
+            + (x.changed ? `<span class="tag t-auto">note</span>` : "")
             + ` <button class="mini" data-edit="${x.row}">force edit</button>`;
         }
         if (x.conflict && editingRow !== x.row)
           outCell += `<div class="warnnote">a timing file exists for
             ${h(x.sid)} but this text does not say timing; check it</div>`;
-        const idCell = x.id ? `<span class="chip">${h(x.id)}</span>`
-          : (x.linked
-            ? `<span class="chip">${h(x.linked)}</span><span class="tag t-link">linked</span>`
-            : `<span style="color:var(--muted)">blank</span>`);
+        let idCell;
+        if (x.linked && x.id) {
+          idCell = x.linkedOk
+            ? `<span class="ov-old">${h(x.id)}</span><span class="chip">${h(x.linked)}</span><span class="tag t-link">corrected</span>`
+            : `<span class="chip">${h(x.id)}</span><span class="tag t-link">pick: ${h(x.linked)}, unconfirmed</span>`;
+        } else if (x.linked) {
+          idCell = `<span class="chip">${h(x.linked)}</span><span class="tag t-link">${x.linkedOk ? "linked" : "unconfirmed"}</span>`;
+        } else if (x.id) {
+          idCell = `<span class="chip">${h(x.id)}</span>`;
+        } else {
+          idCell = `<span style="color:var(--muted)">blank</span>`;
+        }
         return `<tr><td>${x.row}</td><td>${idCell}</td><td>${h(x.county)}</td>
           <td>${h(x.s1)} @ ${h(x.s2)}</td>
           <td class="locked"><span class="lock">&#128274;</span>${h(x.base)
             || '<span style="opacity:.55">blank</span>'}</td>
           <td>${outCell}</td></tr>`;
-      }).join("") + `</tbody></table>
+      }).join("") +
+      newRows.map(nr => `<tr>
+        <td>${nr.row} <span class="tag t-link">new</span></td>
+        <td><span class="chip">${h(nr.id)}</span></td>
+        <td>${h(nr.county)}</td>
+        <td>${h(nr.s1)} @ ${h(nr.s2)}</td>
+        <td class="locked"><span style="opacity:.55">(new row, not in the
+          sheet yet)</span></td>
+        <td><span class="auto">${h(nr.status)}</span></td></tr>`).join("")
+      + `</tbody></table>
       ${shown.length !== col.length
         ? `<p class="note" style="color:var(--muted)">${shown.length} of
            ${col.length} rows shown. The copy buttons always use every row.</p>`
@@ -1039,10 +1166,37 @@ function renderPanel() {
         `the column: ${lines.length} cells, paste at sheet row ${first}`);
     };
     document.getElementById("btnCopyChanges").onclick = () => {
-      const ch = col.filter(x => x.kind === "auto" || x.kind === "override");
+      const ch = col.filter(x => x.changed);
       if (!ch.length) { toast("No changed cells"); return; }
       copyText(ch.map(x => "row " + x.row + "\t" + x.out).join("\n"),
         ch.length + " changed cells");
+    };
+    const bi = document.getElementById("btnCopyIds");
+    if (bi) bi.onclick = () => {
+      const byRow = {};
+      col.forEach(x =>
+        byRow[x.row] = (x.linked && x.linkedOk) ? x.linked : x.id);
+      const lines = [];
+      for (let rr = BASELINE.firstRow; rr <= BASELINE.lastRow; rr++)
+        lines.push(byRow[rr] != null ? byRow[rr] : "");
+      const c = (BASELINE.cols && BASELINE.cols.id) || 0;
+      copyText(lines.join("\n"), `the ID column: ${lines.length} cells, paste `
+        + (c ? `at ${colLetter(c)}${BASELINE.firstRow}` : `over the ID# column`));
+    };
+    const bn = document.getElementById("btnCopyNew");
+    if (bn) bn.onclick = () => {
+      const cols = BASELINE.cols || {};
+      const width = Math.max(cols.status || 28, cols.s2 || 7);
+      const lines = newRows.map(nr => {
+        const cells = Array(width).fill("");
+        const put = (c, v) => { if (c) cells[c - 1] = v; };
+        put(cols.county, nr.county); put(cols.id, nr.id);
+        put(cols.county_id, nr.county_id);
+        put(cols.s1, nr.s1); put(cols.s2, nr.s2); put(cols.status, nr.status);
+        return cells.join("\t");
+      });
+      copyText(lines.join("\n"),
+        `${lines.length} new rows, paste at cell A${BASELINE.lastRow + 1}`);
     };
     document.getElementById("colFilter").oninput = e => {
       colFilter = e.target.value;
@@ -1134,26 +1288,48 @@ function renderPanel() {
     /* linker: signals with a MaxTime link but no master row */
     const linkSec = !a.links_not_in_master.length ? "" : (() => {
       const allRows = baselineRows();
+      const suspects = suspectTypos(state.links, allRows);
       const linkedCount = a.links_not_in_master
         .filter(x => state.linkAssign[x.id]).length;
       const items = a.links_not_in_master.map(x => {
         const lk = state.links[x.id] || { county: x.county, main: x.main,
           side: x.side };
         const asg = state.linkAssign[x.id];
+        const sv = suspects[x.id];
+        const verdict = sv ? `<div class="verdict">Deterministic check: row
+          ${sv.row} carries ID ${h(sv.wrong_id)}, which looks mistyped for
+          ${h(x.id)}. ${sv.why === "duplicate"
+            ? `${h(sv.wrong_id)} sits on more than one row, and its own
+               maxtime intersection matches row ${sv.partner_row} instead.`
+            : `${h(sv.wrong_id)} exists nowhere in maxtime.`}</div>` : "";
         let body;
         if (asg && asg.row != null) {
           const m = allRows.find(rr => rr.row === asg.row) || {};
           body = `<div class="cand"><span class="linked">Linked to sheet row
             ${asg.row}: ${h(m.county)} ${h(m.s1)} @ ${h(m.s2)}</span>
+            ${asg.ok
+              ? `<span class="tag t-auto">sorted out</span>`
+              : `<button data-confirm="${h(x.id)}">I have sorted it
+                 out</button>`}
             <button class="mini" data-clearlink="${h(x.id)}">clear</button></div>` +
-            (S(m.id) && S(m.id) !== x.id
-              ? `<div class="idwarn">That row already carries ID ${h(m.id)}.
-                 Linking it means the sheet's ID there is wrong: check by hand
-                 before changing anything.</div>`
-              : "");
+            (asg.ok
+              ? `<div style="color:var(--ok);font-size:12px">Confirmed: the
+                 sheet column gets a short note on row ${asg.row}${
+                 S(m.id) && S(m.id) !== x.id
+                   ? `, and the ID column copy writes ${h(x.id)} there in
+                      place of ${h(m.id)}`
+                   : `, and the ID column copy fills in ${h(x.id)} there`}.</div>`
+              : (S(m.id) && S(m.id) !== x.id
+                ? `<div class="idwarn">That row still carries ID ${h(m.id)}.
+                   Verify by hand (coordinates or the controller page), then
+                   click sorted out; nothing is written until you do.</div>`
+                : `<div class="warnnote">Verify the intersection by hand,
+                   then click sorted out; nothing is written until you
+                   do.</div>`));
         } else if (asg && asg.missing) {
           body = `<div class="cand"><span class="warnnote">Marked: not in the
-            sheet, a new row must be added.</span>
+            sheet. A prefilled new row now sits at the bottom of the sheet
+            column tab, included in its Copy new rows button.</span>
             <button class="mini" data-clearlink="${h(x.id)}">clear</button></div>`;
         } else {
           const gs = guessRows(lk, allRows);
@@ -1172,16 +1348,19 @@ function renderPanel() {
         }
         return `<div class="card linkcard">
           <span class="chip">${h(x.id)}</span> <b>${h(x.county)}</b>
-          &nbsp;${h(x.main)} @ ${h(x.side)}${body}</div>`;
+          &nbsp;${h(x.main)} @ ${h(x.side)}${verdict}${body}</div>`;
       }).join("");
       return `<div class="anom">
         <h3>Linked signals missing from the master sheet
           (${a.links_not_in_master.length}, ${linkedCount} decided)</h3>
         <p class="exp">Each has a MaxTime link but no master row with its ID.
         The rows below are the tool's best guesses from the street names,
-        best first; many sheet rows exist with the ID left blank. Click the
-        matching row, then check the intersection by hand before trusting it.
-        Once linked, the ID can be typed into that sheet row.</p>
+        best first; many sheet rows exist with the ID left blank, and a blue
+        box marks a near certain mistyped ID found deterministically from the
+        two sheets. Click the matching row, verify by hand (the sheet's
+        Latitude and Longitude in a map, or the controller's own page), then
+        click "I have sorted it out". Only that click puts the note into the
+        sheet column and the ID fix into the ID column copy.</p>
         <div class="bar">
           <button id="btnCopyLinks">Copy ID assignments</button>
           <span class="note">one line per decided signal: the sheet row to
@@ -1273,13 +1452,18 @@ function renderPanel() {
 
     p.onclick = ev => {
       const b = ev.target.closest(
-        "[data-pick],[data-newrow],[data-clearlink],[data-keep],[data-dupflag]");
+        "[data-pick],[data-newrow],[data-clearlink],[data-confirm],"
+        + "[data-keep],[data-dupflag]");
       if (!b) return;
       if (b.dataset.pick) {
         state.linkAssign[b.dataset.pick] = { row: +b.dataset.row };
         store.set("linkAssign", state.linkAssign);
         toast("Linked " + b.dataset.pick + " to row " + b.dataset.row
-          + ". Check it by hand.");
+          + ". Check it by hand, then click sorted out.");
+      } else if (b.dataset.confirm) {
+        const cur = state.linkAssign[b.dataset.confirm];
+        if (cur) { cur.ok = true; store.set("linkAssign", state.linkAssign); }
+        toast("Sorted out: the note and the ID fix are in the copies now");
       } else if (b.dataset.newrow) {
         state.linkAssign[b.dataset.newrow] = { missing: true };
         store.set("linkAssign", state.linkAssign);

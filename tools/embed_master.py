@@ -52,6 +52,8 @@ def snapshot(master_path):
     c_det = T._find_col(header, exact="Detection")
     c_boxfr = T._find_col(header, "box", "rack")
     c_boxdone = T._find_box_done_col(header)
+    cols = {"county": c_county, "id": c_id, "county_id": c_cid,
+            "s1": c_s1, "s2": c_s2, "status": c_ab}
     out = []
     for rownum, r in rows[1:]:
         def g(col):
@@ -64,7 +66,7 @@ def snapshot(master_path):
         }
         if any([rec["id"], rec["county"], rec["s1"], rec["s2"], rec["status"]]):
             out.append(rec)
-    return out
+    return out, cols
 
 
 def main():
@@ -74,12 +76,13 @@ def main():
     ap.add_argument("--template", default=str(ROOT / "webapp" / "index.html"))
     args = ap.parse_args()
 
-    rows = snapshot(args.master)
+    rows, cols = snapshot(args.master)
     baseline = {
         "generated": datetime.date.today().isoformat(),
         "source": pathlib.Path(args.master).name,
         "firstRow": 2,
         "lastRow": max(r["row"] for r in rows),
+        "cols": cols,   # 1 based sheet column of each captured field
         "rows": rows,
         "notes": NOTES,
     }
