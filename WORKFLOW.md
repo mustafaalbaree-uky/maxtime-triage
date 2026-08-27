@@ -75,6 +75,14 @@ timing database. Open it and decide by hand before downloading a new one.
 
 Open the **anomalies** tab and handle each group:
 
+- **Master IDs outside the links sheet's range**: the links export only spans
+  one block of IDs, so master rows numbered outside it cannot be judged by
+  anything MaxTime based, and "unknown to maxtime" evidence (including the
+  blue box mistyped ID checks) means nothing for them. The card counts them
+  by county, flags any that already have a timing file in SharePoint (which
+  argues the export is incomplete rather than the signals out of scope), and
+  its copy button produces a ready summary with the question to put to the
+  supervisor. Do not mark these rows NA on your own.
 - **Nonstandard names**: matched by ID but worth retitling to `CCC_IDID_name`.
 - **County prefix disagrees**: blocking TODO. The task is not complete until
   each one is checked by hand and ticked off in its card. If the master is
