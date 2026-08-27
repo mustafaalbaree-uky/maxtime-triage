@@ -5,15 +5,13 @@ opened in Edge; the downloader is a small Python script. Nothing is uploaded.
 
 ## One time setup
 
-1. Take the dashboard to the work computer and double click it to open in Edge.
-   Preferred: generate `webapp/d7.html` first (on the home Mac, run
-   `python3 tools/embed_master.py <master.xlsx>`) and carry that file; it has
-   the master sheet snapshot baked in, so the sheet column view works and the
-   master sheet never needs to be dropped again. `d7.html` holds real district
-   data: it is gitignored and moves by email or drive, never through the repo.
-   Fallback: the plain `webapp/index.html` from the repository works the same
-   but needs the master sheet dropped each time and cannot show the rows whose
-   ID cell is blank.
+1. Take `webapp/index.html` to the work computer (download it from the
+   repository there) and double click it to open in Edge. Everything works
+   from the dropped sheets, including the blank ID rows, the row aligned
+   column pastes, and the new row layout. The generated copy with a baked in
+   snapshot (`python3 tools/embed_master.py <master.xlsx>`, gitignored) is
+   retired; it still builds but is only worth it if dropping the master
+   sheet each time ever becomes a bother.
 2. Optional, only needed for the automatic downloader: confirm Python 3 is
    present (`python3 --version` or `py --version`).
 

@@ -378,7 +378,15 @@ function parseMaster(rows) {
       s1: S(r[c.s1]), s2: S(r[c.s2]), status: S(r[c.ab]),
       detection: S(r[c.det]), box_fr: S(r[c.boxfr]), box_done: S(r[c.boxdone]) });
   }
-  return out;
+  /* sheet geometry, so the row aligned pastes and the new row layout work
+     straight from a dropped sheet */
+  const meta = out.length ? {
+    firstRow: Math.min(...out.map(r => r.row)),
+    lastRow: Math.max(...out.map(r => r.row)),
+    cols: { county: c.county, id: c.id, county_id: c.cid,
+      s1: c.s1, s2: c.s2, status: c.ab },
+  } : null;
+  return { rows: out, meta };
 }
 
 function classifyStatus(text) {
@@ -732,6 +740,7 @@ const store = {
 let state = {
   links: store.get("links", null),
   master: store.get("master", null),
+  masterMeta: store.get("masterMeta", null),
   listing: store.get("listing", null),
   listingLabel: store.get("listingLabel", ""),
   done: store.get("done", {}),
@@ -747,11 +756,27 @@ let editingRow = null;  // sheet row currently open for a force edit, not saved
 let colFilter = "", colChangesOnly = false;  // sheet column view filters
 
 /* Every master sheet row, whether or not it has an ID. From the baked in
-   snapshot when this is the generated copy, else derived from the dropped
-   master sheet (which skips rows with a blank ID). */
+   snapshot when this is a generated copy, else from the dropped master
+   sheet (which also keeps blank ID rows that carry content). */
 function baselineRows() {
   if (BASELINE) return BASELINE.rows;
   return state.master || [];
+}
+
+/* Sheet geometry for the row aligned pastes: row span plus the 1 based
+   column position of each captured field. From the baked in snapshot when
+   this is a generated copy, else recorded when the master sheet is dropped.
+   A master stored by an older version of the tool has no recorded columns;
+   the span is synthesized and cols stays null until the sheet is dropped
+   again. */
+function masterMeta() {
+  if (BASELINE) return { firstRow: BASELINE.firstRow,
+    lastRow: BASELINE.lastRow, cols: BASELINE.cols || null };
+  if (state.masterMeta) return state.masterMeta;
+  const rows = state.master || [];
+  if (!rows.length) return null;
+  return { firstRow: Math.min(...rows.map(r => r.row)),
+    lastRow: Math.max(...rows.map(r => r.row)), cols: null };
 }
 
 function effectiveMaster() {
@@ -796,8 +821,10 @@ async function ingestXlsx(files) {
         toast("Loaded links sheet: " +
           Object.keys(state.links).length + " signals");
       } else if (wb.sheetNames.includes("MASTER SIGNAL LIST")) {
-        state.master = parseMaster(await wb.rows("MASTER SIGNAL LIST"));
+        const parsed = parseMaster(await wb.rows("MASTER SIGNAL LIST"));
+        state.master = parsed.rows; state.masterMeta = parsed.meta;
         store.set("master", state.master);
+        store.set("masterMeta", state.masterMeta);
         toast("Loaded master sheet: " + state.master.length + " rows");
       } else {
         toast(f.name + ": no recognized sheet found");
@@ -884,12 +911,13 @@ function wireInputs() {
   document.getElementById("btnClear").onclick = () => {
     if (!confirm("Forget the loaded sheets, the listing, all checkmarks, and "
       + "all column edits, row links, and duplicate decisions?")) return;
-    for (const k of ["links", "master", "listing", "listingLabel", "done",
-      "boxdone", "override", "linkAssign", "dupResolve", "countyTodo", "tab"])
+    for (const k of ["links", "master", "masterMeta", "listing",
+      "listingLabel", "done", "boxdone", "override", "linkAssign",
+      "dupResolve", "countyTodo", "tab"])
       store.del(k);
-    state = { links: null, master: null, listing: null, listingLabel: "",
-      done: {}, boxdone: {}, override: {}, linkAssign: {}, dupResolve: {},
-      countyTodo: {}, tab: "needs" };
+    state = { links: null, master: null, masterMeta: null, listing: null,
+      listingLabel: "", done: {}, boxdone: {}, override: {}, linkAssign: {},
+      dupResolve: {}, countyTodo: {}, tab: "needs" };
     refresh(); toast("Cleared");
   };
   document.getElementById("btnDemo").onclick = loadDemo;
@@ -990,12 +1018,13 @@ function computeColumn() {
 
 /* Rows to append below the sheet for signals marked "not in the sheet".
    Prefilled from the links sheet; CountyID comes from the county's other
-   rows. Only possible with the baked in snapshot (needs true row numbers). */
+   rows. Row numbers continue below the sheet's last captured row. */
 function newSheetRows() {
-  if (!BASELINE || !result || !state.links) return [];
+  const meta = masterMeta();
+  if (!meta || !result || !state.links) return [];
   const needIds = new Set(result.needs_download.map(e => e.id));
   const cidByCounty = {};
-  for (const r of BASELINE.rows) {
+  for (const r of baselineRows()) {
     const co = S(r.county).toUpperCase(), cid = S(r.county_id);
     if (co && cid) {
       cidByCounty[co] = cidByCounty[co] || {};
@@ -1007,7 +1036,7 @@ function newSheetRows() {
     return m ? Object.keys(m).sort((a, b) => m[b] - m[a])[0] : "";
   };
   const out = [];
-  let rowNum = BASELINE.lastRow;
+  let rowNum = meta.lastRow;
   for (const sid of Object.keys(state.linkAssign).sort(idCmp)) {
     const v = state.linkAssign[sid];
     if (!v || !v.missing) continue;
@@ -1206,10 +1235,10 @@ function renderPanel() {
       return [x.id, x.sid, x.county, x.s1, x.s2, x.base, x.out, "row " + x.row]
         .some(v => S(v).toLowerCase().includes(flt));
     });
+    const meta = masterMeta();
     const srcNote = BASELINE
       ? `snapshot of ${h(BASELINE.source)}, taken ${h(BASELINE.generated)}`
-      : "from the dropped master sheet (rows with a blank ID are not shown; "
-        + "use the generated copy for the full column)";
+      : "from the dropped master sheet";
     p.innerHTML = `
       <div class="card" style="margin-bottom:12px">
         <b>The master sheet's "Timing &amp; key updated to sharepoint" column</b>,
@@ -1221,7 +1250,7 @@ function renderPanel() {
       <div class="bar">
         <button class="primary" id="btnCopyCol">Copy the whole column</button>
         <button id="btnCopyChanges">Copy changed cells only (row and value)</button>
-        ${idFixes && BASELINE
+        ${idFixes && meta
           ? `<button id="btnCopyIds">Copy ID column (${idFixes} fixes)</button>`
           : ""}
         ${newRows.length
@@ -1234,12 +1263,12 @@ function renderPanel() {
           changes only</label>
         <span class="note">${nKept} already filled, ${nAuto} autofilled,
         ${nOver} forced. Timing column pastes at
-        ${BASELINE && BASELINE.cols ? "cell "
-          + colLetter(BASELINE.cols.status) + BASELINE.firstRow
+        ${meta && meta.cols && meta.cols.status ? "cell "
+          + colLetter(meta.cols.status) + meta.firstRow
           : "its column, row 2"}. The ID column pastes over the ID# column the
         same way; unchanged cells are copied exactly as they are, so the paste
         only alters the fixes. New rows paste at cell
-        A${BASELINE ? BASELINE.lastRow + 1 : ""}. Do it on a fresh copy of the
+        A${meta ? meta.lastRow + 1 : ""}. Do it on a fresh copy of the
         sheet the first time.</span>
       </div>
       <table><thead><tr><th>Sheet row</th><th>ID</th><th>County</th>
@@ -1309,8 +1338,8 @@ function renderPanel() {
     document.getElementById("btnCopyCol").onclick = () => {
       const byRow = {};
       col.forEach(x => byRow[x.row] = x.out);
-      const first = BASELINE ? BASELINE.firstRow : Math.min(...col.map(x => x.row));
-      const last = BASELINE ? BASELINE.lastRow : Math.max(...col.map(x => x.row));
+      const first = meta ? meta.firstRow : Math.min(...col.map(x => x.row));
+      const last = meta ? meta.lastRow : Math.max(...col.map(x => x.row));
       const lines = [];
       for (let rr = first; rr <= last; rr++)
         lines.push(byRow[rr] != null ? byRow[rr] : "");
@@ -1329,15 +1358,20 @@ function renderPanel() {
       col.forEach(x =>
         byRow[x.row] = (x.linked && x.linkedOk) ? x.linked : x.id);
       const lines = [];
-      for (let rr = BASELINE.firstRow; rr <= BASELINE.lastRow; rr++)
+      for (let rr = meta.firstRow; rr <= meta.lastRow; rr++)
         lines.push(byRow[rr] != null ? byRow[rr] : "");
-      const c = (BASELINE.cols && BASELINE.cols.id) || 0;
+      const c = (meta.cols && meta.cols.id) || 0;
       copyText(lines.join("\n"), `the ID column: ${lines.length} cells, paste `
-        + (c ? `at ${colLetter(c)}${BASELINE.firstRow}` : `over the ID# column`));
+        + (c ? `at ${colLetter(c)}${meta.firstRow}` : `over the ID# column`));
     };
     const bn = document.getElementById("btnCopyNew");
     if (bn) bn.onclick = () => {
-      const cols = BASELINE.cols || {};
+      const cols = (meta && meta.cols) || null;
+      if (!cols || !cols.id) {
+        toast("Drop the master sheet again first, so the tool knows "
+          + "its column layout");
+        return;
+      }
       const width = Math.max(cols.status || 28, cols.s2 || 7);
       const lines = newRows.map(nr => {
         const cells = Array(width).fill("");
@@ -1348,7 +1382,7 @@ function renderPanel() {
         return cells.join("\t");
       });
       copyText(lines.join("\n"),
-        `${lines.length} new rows, paste at cell A${BASELINE.lastRow + 1}`);
+        `${lines.length} new rows, paste at cell A${meta.lastRow + 1}`);
     };
     document.getElementById("colFilter").oninput = e => {
       colFilter = e.target.value;
@@ -1910,6 +1944,7 @@ function loadDemo() {
     M(12, "0312", "CEDAR", "34", "US 42", "QUARRY RD", "", "", "", ""),
     M(13, "45", "MAPLE", "12", "US 10", "MILLPOND LN", "", "", "", ""),
   ];
+  state.masterMeta = null;  // demo rows, not a dropped sheet
   state.listing = [
     "012_7000_US10@OAK_ST",              // standard, covered
     "012_7002_US10@ELM_AVE",             // duplicate id

@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Bake a snapshot of the district master sheet into the dashboard.
 
+RETIRED from the normal workflow (Aug 2026): plain webapp/index.html now does
+everything from the dropped sheets, including blank ID rows, the row aligned
+pastes, and the new row layout, so nothing needs the baked copy. This still
+works and is kept only for the convenience of not dropping the master sheet
+each time.
+
 Reads every content row of the MASTER SIGNAL LIST sheet, including rows whose
-ID cell is blank (parse_master skips those, but the sheet column view and the
-row linker need them), and writes webapp/d7.html: a copy of webapp/index.html
+ID cell is blank, and writes webapp/d7.html: a copy of webapp/index.html
 with the snapshot injected between the BASELINE markers.
 
 webapp/d7.html carries real district data and must never be committed. The
