@@ -111,6 +111,26 @@ def main():
         assert T.classify_box(next(m for m in master if m["id"] == e["id"]
                                    and m["row"] == e["master_row"])) == "todo"
 
+    # jurisdiction: IDs below the cutoff are Fayette County and must not
+    # reach any list, count, or deterministic verdict.
+    oos_rows = {m["row"] for m in master if T.out_of_scope(m, links)}
+    assert oos_rows, "no out of jurisdiction rows in this master sheet"
+    below = lambda sid: sid.isdigit() and int(sid) < T.JURISDICTION_MIN_ID
+    for sid in need_ids:
+        assert not below(sid), ("needs_download", sid)
+    for e in result["mark_timing"]:
+        assert not below(e["id"]) and e["master_row"] not in oos_rows, e
+    for e in result["box_check"]:
+        assert not below(e["id"]) and e["master_row"] not in oos_rows, e
+    for d in an["master_dup_ids"]:
+        assert not below(d["id"]), d
+        assert all(r["row"] not in oos_rows for r in d["rows"]), d
+    for sid in result["info"]["master_not_in_links"]:
+        assert not below(sid), ("master_not_in_links", sid)
+    for x, d in T.det_verdicts(links, T.in_scope_rows(master, links)).items():
+        assert d["row"] not in oos_rows, ("verdict on an out of scope row", x, d)
+    assert result["info"]["out_of_scope"]["rows"] == len(oos_rows)
+
     data = pathlib.Path(__file__).parent.parent / "data"
     data.mkdir(exist_ok=True)
     (data / "mock_listing.txt").write_text("\n".join(names) + "\n")
@@ -125,6 +145,10 @@ def main():
     for k, v in an.items():
         print("anomaly %s: %d" % (k, len(v)))
     print("info master_not_in_links: %d" % len(result["info"]["master_not_in_links"]))
+    oos = result["info"]["out_of_scope"]
+    print("out of jurisdiction: %d rows (%d with an id), %s"
+          % (oos["rows"], oos["with_id"],
+             ", ".join("%s %d" % (c, n) for c, n in oos["counties"])))
     print("wrote data/mock_listing.txt and data/expected.json")
 
 

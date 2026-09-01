@@ -5,6 +5,7 @@ same rules to JavaScript; tools/verify.py asserts the two agree.
 Stdlib only, so it also runs on a locked down work machine.
 """
 
+import collections
 import re
 import zipfile
 import xml.etree.ElementTree as ET
@@ -157,6 +158,32 @@ def classify_status(text):
     if t == "na" or t == "n/a":
         return "excluded"
     return "todo"
+
+
+# Out of jurisdiction. Confirmed by the supervisor on 1 Sep 2026: signal IDs
+# below 4000 are Fayette County, which this district does not maintain. The
+# links sheet agrees from its own side, starting at 4000 and carrying no
+# Fayette signal at all.
+JURISDICTION_MIN_ID = 4000
+OUT_OF_SCOPE_COUNTY = "FAYETTE"
+
+
+def out_of_scope(m, links=None):
+    """Whether a master row falls outside this district's jurisdiction.
+
+    A row whose ID MaxTime knows is ours whatever its county cell says, so
+    that check comes first."""
+    sid = str(m.get("id", "")).strip()
+    if links and sid and sid in links:
+        return False
+    if sid.isdigit() and int(sid) < JURISDICTION_MIN_ID:
+        return True
+    return (m.get("county") or "").strip().upper() == OUT_OF_SCOPE_COUNTY
+
+
+def in_scope_rows(master, links=None):
+    """The master rows every cross reference is allowed to consider."""
+    return [m for m in master if not out_of_scope(m, links)]
 
 
 def classify_box(m):
@@ -405,8 +432,13 @@ def analyze(links, master, filenames):
         return [{"name": f["name"], "kind": f["kind"]}
                 for f in files_by_id.get(sid, []) if f["kind"] != "timing"]
 
+    # out of jurisdiction rows take no part in any cross reference; the
+    # dashboard still lists them so its row aligned paste stays aligned
+    out_rows = [m for m in master if out_of_scope(m, links)]
+    in_scope = [m for m in master if not out_of_scope(m, links)]
+
     master_by_id, master_rows_by_id = {}, {}
-    for m in master:
+    for m in in_scope:
         if not m["id"]:
             continue  # blank ID rows exist only for the row linker
         master_rows_by_id.setdefault(m["id"], []).append(m)
@@ -505,6 +537,15 @@ def analyze(links, master, filenames):
         },
         "info": {
             "master_not_in_links": master_not_in_links,
+            "out_of_scope": {
+                "rows": len(out_rows),
+                "with_id": len([m for m in out_rows if m["id"]]),
+                "counties": sorted(
+                    collections.Counter(
+                        (m["county"] or "").strip().upper() or "(no county)"
+                        for m in out_rows).items(),
+                    key=lambda kv: (-kv[1], kv[0])),
+            },
             "covered_count": len(covered),
             "timing_file_count": sum(len(v) for v in timing_by_id.values()),
             "key_file_count": key_count,

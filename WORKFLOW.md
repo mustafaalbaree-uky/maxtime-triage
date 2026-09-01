@@ -73,14 +73,13 @@ timing database. Open it and decide by hand before downloading a new one.
 
 Open the **anomalies** tab and handle each group:
 
-- **Master IDs outside the links sheet's range**: the links export only spans
-  one block of IDs, so master rows numbered outside it cannot be judged by
-  anything MaxTime based, and "unknown to maxtime" evidence (including the
-  blue box mistyped ID checks) means nothing for them. The card counts them
-  by county, flags any that already have a timing file in SharePoint (which
-  argues the export is incomplete rather than the signals out of scope), and
-  its copy button produces a ready summary with the question to put to the
-  supervisor. Do not mark these rows NA on your own.
+- **Out of jurisdiction**: a count, not a worklist. Signal IDs below 4000 are
+  Fayette County, which this district does not maintain, confirmed by the
+  supervisor on 1 September 2026. The tool sets those rows aside everywhere:
+  they are not in the download list, the box check, the duplicate ID rows or
+  the missing signal linker, and their timing column pastes back exactly as
+  the sheet has it. There is nothing to do here and nothing to type in the
+  sheet for them.
 - **Nonstandard names**: matched by ID but worth retitling to `CCC_IDID_name`.
 - **County prefix disagrees**: blocking TODO. The task is not complete until
   each one is checked by hand and ticked off in its card. If the master is

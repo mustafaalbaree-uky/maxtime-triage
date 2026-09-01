@@ -74,6 +74,8 @@
   .tag.t-auto { background: #e3f4e8; color: var(--ok); }
   .tag.t-over { background: #fbe4e2; color: var(--bad); }
   .tag.t-link { background: #e8f0fe; color: var(--accent); }
+  .tag.t-oos { background: #eeeeef; color: var(--muted); }
+  tr.oos td { opacity: .55; }
   .ov-old { text-decoration: line-through; color: var(--muted); margin-right: 6px; }
   .ov-new { color: var(--bad); font-weight: 600; }
   .mini { border: 0; background: none; color: var(--accent); cursor: pointer;
@@ -175,7 +177,7 @@
 
 <script>
 "use strict";
-const BUILD = "v1.8.0, built 2026-08-26";
+const BUILD = "v1.9.0, built 2026-09-01";
 document.getElementById("stamp").textContent =
   "MaxTime Timing Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -295,6 +297,24 @@ function extOf(name) {
   if (base.includes(".") && !base.startsWith("."))
     return base.split(".").pop().toLowerCase();
   return "";
+}
+
+/* ---------- jurisdiction ----------
+   Confirmed by the supervisor on 1 Sep 2026: signal IDs below 4000 are
+   Fayette County, which this district does not maintain. The links sheet
+   agrees from its own side, starting at 4000 and carrying no Fayette signal
+   at all. A master row outside the jurisdiction is left exactly as the sheet
+   has it: no download, no box check, no verdict, no row suggestion, no note,
+   no count, and its timing column pastes back blank. A row whose ID MaxTime
+   knows is ours whatever its county cell says, so that check comes first. */
+const JURISDICTION_MIN_ID = 4000;
+const OUT_OF_SCOPE_COUNTY = "FAYETTE";
+
+function outOfScope(m, links) {
+  const sid = S(m.id);
+  if (links && sid && sid in links) return false;
+  if (/^\d+$/.test(sid) && parseInt(sid, 10) < JURISDICTION_MIN_ID) return true;
+  return S(m.county).toUpperCase() === OUT_OF_SCOPE_COUNTY;
 }
 
 function classifyFile(name, validIds) {
@@ -436,8 +456,13 @@ function analyze(links, master, filenames) {
   const related = sid => (filesById[sid] || [])
     .filter(f => f.kind !== "timing").map(f => ({ name: f.name, kind: f.kind }));
 
+  /* out of jurisdiction rows take no part in any cross reference. The sheet
+     column tab still lists them, so the row aligned paste stays aligned. */
+  const out_of_jurisdiction = master.filter(m => outOfScope(m, links));
+  const inScope = master.filter(m => !outOfScope(m, links));
+
   const masterById = {}, masterRowsById = {};
-  for (const m of master) {
+  for (const m of inScope) {
     if (!m.id) continue;  // blank ID rows exist only for the row linker
     (masterRowsById[m.id] = masterRowsById[m.id] || []).push(m);
     if (!(m.id in masterById)) masterById[m.id] = m;
@@ -497,29 +522,19 @@ function analyze(links, master, filenames) {
       classifyStatus(masterById[s].status) === "done")
     .map(s => ({ id: s, related_files: related(s) }));
 
-  /* master IDs outside the numeric span of the links sheet. Nothing MaxTime
-     based can judge these rows: no download link, no intersection name to
-     compare, and "unknown to maxtime" means nothing for them. Either the
-     links export is incomplete or the signals are out of scope (city
-     maintained, their own numbering); a timing file already in SharePoint
-     under such an ID is evidence for the export being incomplete. */
-  let range_gap = null;
-  const linkNums = Object.keys(links).filter(s => /^\d+$/.test(s))
-    .map(s => parseInt(s, 10));
-  if (linkNums.length) {
-    const lo = Math.min(...linkNums), hi = Math.max(...linkNums);
-    const rows = Object.keys(masterById).filter(s => /^\d+$/.test(s))
-      .map(s => ({ id: s, n: parseInt(s, 10), m: masterById[s] }))
-      .filter(x => x.n < lo || x.n > hi)
-      .sort((p, q) => p.n - q.n)
-      .map(x => ({ id: x.id, row: x.m.row,
-        county: S(x.m.county).toUpperCase() || "(no county)",
-        side: x.n < lo ? "below" : "above",
-        timing_file: covered.has(x.id),
-        other_file: !covered.has(x.id) && (filesById[x.id] || []).length > 0 }));
-    if (rows.length)
-      range_gap = { lo, hi, link_count: Object.keys(links).length, rows };
+  /* how many rows the jurisdiction rule set aside, for the quiet line on
+     the anomalies tab. A tally only: there is nothing here to work. */
+  const oosByCounty = {};
+  for (const m of out_of_jurisdiction) {
+    const c = S(m.county).toUpperCase() || "(no county)";
+    oosByCounty[c] = (oosByCounty[c] || 0) + 1;
   }
+  const out_of_scope = {
+    rows: out_of_jurisdiction.length,
+    with_id: out_of_jurisdiction.filter(m => S(m.id)).length,
+    counties: Object.entries(oosByCounty)
+      .sort((p, q) => q[1] - p[1] || (p[0] < q[0] ? -1 : 1)),
+  };
 
   const box_check = [];
   for (const sid of Object.keys(links).sort(idCmp)) {
@@ -534,9 +549,9 @@ function analyze(links, master, filenames) {
     needs_download, duplicates, mark_timing, box_check,
     anomalies: {
       nonstandard_naming, special_files, unmatched_files, county_mismatch,
-      links_not_in_master, master_dup_ids, says_done_no_file, range_gap,
+      links_not_in_master, master_dup_ids, says_done_no_file,
     },
-    info: { master_not_in_links, covered_count: covered.size,
+    info: { master_not_in_links, covered_count: covered.size, out_of_scope,
       timing_file_count: Object.values(timingById).reduce((a, v) => a + v.length, 0),
       key_file_count: keyCount, ignored_count: ignoredCount },
   };
@@ -663,7 +678,7 @@ function detVerdicts(links, rows) {
    a card withdraws it and it stays withdrawn. */
 function autoApplyVerdicts() {
   if (!state.links) return;
-  const rows = baselineRows();
+  const rows = linkableRows();
   if (!rows.length) return;
   let changed = false;
   for (const [sid, d] of Object.entries(detVerdicts(state.links, rows))) {
@@ -696,7 +711,8 @@ function autoApplyVerdicts() {
 }
 
 function dupGroups() {
-  const master = effectiveMaster() || [];
+  const master = (effectiveMaster() || [])
+    .filter(m => !outOfScope(m, state.links || {}));
   const byId = {};
   for (const m of master)
     if (S(m.id)) (byId[m.id] = byId[m.id] || []).push(m);
@@ -777,6 +793,13 @@ function masterMeta() {
   if (!rows.length) return null;
   return { firstRow: Math.min(...rows.map(r => r.row)),
     lastRow: Math.max(...rows.map(r => r.row)), cols: null };
+}
+
+/* The rows the row linker is allowed to touch: every sheet row minus the
+   ones outside the jurisdiction, which must never be offered as the home of
+   a MaxTime signal or carry a corrected ID. */
+function linkableRows() {
+  return baselineRows().filter(m => !outOfScope(m, state.links || {}));
 }
 
 function effectiveMaster() {
@@ -963,7 +986,7 @@ function anomalyCount(a) {
   return a.nonstandard_naming.length + a.special_files.length +
     a.unmatched_files.length + a.county_mismatch.length +
     a.links_not_in_master.length + a.master_dup_ids.length +
-    a.says_done_no_file.length + (a.range_gap ? 1 : 0);
+    a.says_done_no_file.length;
 }
 
 /* One entry per master sheet row: what the timing column already says (base),
@@ -980,6 +1003,12 @@ function computeColumn() {
   const dnotes = dupNotes();
   return rows.map(r => {
     const base = S(r.status);
+    /* outside the jurisdiction: the cell goes back exactly as it came, with
+       no autofill, no note, and no force edit */
+    if (outOfScope(r, state.links || {}))
+      return { row: r.row, id: S(r.id), linked: null, linkedOk: false,
+        sid: null, county: r.county, s1: r.s1, s2: r.s2, base, out: base,
+        kind: "outscope", conflict: false, changed: false };
     const ln = linkedByRow[r.row] || null;
     const linked = ln ? ln.sid : null;
     const linkedOk = !!(ln && ln.ok);
@@ -1228,6 +1257,7 @@ function renderPanel() {
     const nAuto = col.filter(x => x.kind === "auto").length;
     const nOver = col.filter(x => x.kind === "override").length;
     const nKept = col.filter(x => x.kind === "kept").length;
+    const nOos = col.filter(x => x.kind === "outscope").length;
     const flt = colFilter.trim().toLowerCase();
     const shown = col.filter(x => {
       if (colChangesOnly && !x.changed && !x.conflict) return false;
@@ -1262,7 +1292,8 @@ function renderPanel() {
           <input type="checkbox" id="colChanges" ${colChangesOnly ? "checked" : ""}>
           changes only</label>
         <span class="note">${nKept} already filled, ${nAuto} autofilled,
-        ${nOver} forced. Timing column pastes at
+        ${nOver} forced${nOos ? `, ${nOos} out of jurisdiction and left blank`
+          : ""}. Timing column pastes at
         ${meta && meta.cols && meta.cols.status ? "cell "
           + colLetter(meta.cols.status) + meta.firstRow
           : "its column, row 2"}. The ID column pastes over the ID# column the
@@ -1291,6 +1322,9 @@ function renderPanel() {
             <span class="ov-new">${h(x.out) || "(cleared)"}</span>
             <span class="tag t-over">forced</span>
             <button class="mini" data-revert="${x.row}">revert</button>`;
+        } else if (x.kind === "outscope") {
+          outCell = `<span style="color:var(--muted)">${h(x.base) || "(blank)"}</span>
+            <span class="tag t-oos">out of jurisdiction</span>`;
         } else if (x.kind === "auto") {
           outCell = `<span class="auto">${h(x.out)}</span>
             <span class="tag t-auto">auto</span>
@@ -1316,7 +1350,8 @@ function renderPanel() {
         } else {
           idCell = `<span style="color:var(--muted)">blank</span>`;
         }
-        return `<tr><td>${x.row}</td><td>${idCell}</td><td>${h(x.county)}</td>
+        return `<tr${x.kind === "outscope" ? ' class="oos"' : ""}>
+          <td>${x.row}</td><td>${idCell}</td><td>${h(x.county)}</td>
           <td>${h(x.s1)} @ ${h(x.s2)}</td>
           <td class="locked"><span class="lock">&#128274;</span>${h(x.base)
             || '<span style="opacity:.55">blank</span>'}</td>
@@ -1442,59 +1477,19 @@ function renderPanel() {
       <div class="card" style="font:12px ui-monospace,Consolas,monospace;
         max-height:220px;overflow:auto">${items.map(h).join("<br>")}</div></div>` : "";
 
-    /* master IDs outside the links sheet's numeric span: a briefing card for
-       the supervisor question, not a worklist. Aggregated once, shared by the
-       card and its copy button. */
-    const rangeAgg = !a.range_gap ? null : (() => {
-      const g = a.range_gap, byCounty = {};
-      for (const x of g.rows) {
-        const c = byCounty[x.county] = byCounty[x.county]
-          || { total: 0, below: 0, above: 0, timing: 0, other: 0 };
-        c.total++; c[x.side]++;
-        if (x.timing_file) c.timing++;
-        else if (x.other_file) c.other++;
-      }
-      const counties = Object.entries(byCounty)
-        .sort((p, q) => q[1].total - p[1].total || (p[0] < q[0] ? -1 : 1));
-      return { g, counties,
-        evidence: g.rows.filter(x => x.timing_file),
-        below: g.rows.filter(x => x.side === "below").length,
-        above: g.rows.filter(x => x.side === "above").length };
-    })();
-    const rangeSec = !rangeAgg ? "" : (() => {
-      const { g, counties, evidence, below, above } = rangeAgg;
-      return `<div class="anom">
-        <h3>Master IDs outside the links sheet's range (${g.rows.length} rows)</h3>
-        <p class="exp">The links sheet covers IDs ${g.lo} to ${g.hi}
-        (${g.link_count} signals). These master rows carry a numeric ID outside
-        that span, so nothing MaxTime based can judge them: no controller link,
-        no intersection name to compare, and "unknown to maxtime" is
-        meaningless for them, including in the blue box mistyped ID checks.
-        Do not mark them NA on your own; this is the supervisor's call. The
-        copy button below has a ready summary to send or show.</p>
-        ${evidence.length
-          ? `<div class="verdict">${evidence.length} of these IDs already
-             ${evidence.length === 1 ? "has" : "have"} a timing file in
-             SharePoint: ${evidence.map(x => h(x.id)).join(", ")}.
-             Someone downloaded timing for ${evidence.length === 1 ? "it"
-               : "them"}, which argues the links export is incomplete rather
-             than the signals out of scope.</div>`
-          : `<div class="verdict">None of these IDs has a timing file in
-             SharePoint, which fits them being outside this task rather than
-             missing from the export.</div>`}
-        <div style="overflow:auto"><table><thead><tr><th>County</th>
-          <th>rows</th><th>below ${g.lo}</th><th>above ${g.hi}</th>
-          <th>timing file exists</th><th>other file exists</th></tr></thead>
-          <tbody>${counties.map(([co, c]) => `<tr><td>${h(co)}</td>
-            <td>${c.total}</td><td>${c.below || ""}</td><td>${c.above || ""}</td>
-            <td>${c.timing || ""}</td><td>${c.other || ""}</td></tr>`).join("")}
-          <tr><th>total</th><th>${g.rows.length}</th><th>${below || ""}</th>
-            <th>${above || ""}</th><th>${evidence.length || ""}</th><th></th></tr>
-          </tbody></table></div>
-        <div class="bar">
-          <button id="btnCopyRange">Copy summary for the supervisor</button>
-        </div></div>`;
-    })();
+    /* the jurisdiction answer, so the rows missing from every count above
+       are accounted for. A statement, not a worklist: no buttons. */
+    const oos = result.info.out_of_scope;
+    const oosSec = !(oos && oos.rows) ? "" : `<div class="anom">
+      <h3>Out of jurisdiction (${oos.rows} rows, not counted here)</h3>
+      <p class="exp">${h(OUT_OF_SCOPE_COUNTY.charAt(0)
+        + OUT_OF_SCOPE_COUNTY.slice(1).toLowerCase())} County rows, and any
+      row with an ID below ${JURISDICTION_MIN_ID}. This district maintains
+      neither. By county: ${oos.counties
+        .map(([co, n]) => `${h(co)} ${n}`).join(", ")}. They take no part in
+      the download list, the box check, the duplicate ID rows, or the missing
+      signal linker, and their timing column pastes back exactly as the sheet
+      has it.</p></div>`;
 
     /* county prefix disagreements are blocking TODOs, checked off by hand */
     const countySec = !a.county_mismatch.length ? "" : (() => {
@@ -1538,7 +1533,7 @@ function renderPanel() {
     const linkList = a.links_not_in_master.concat(missingMarked)
       .sort((p, q) => idCmp(p.id, q.id));
     const linkSec = !linkList.length ? "" : (() => {
-      const allRows = baselineRows();
+      const allRows = linkableRows();
       const verdicts = detVerdicts(state.links, allRows);
       const linkedCount = linkList.filter(x => {
         const asg2 = state.linkAssign[x.id];
@@ -1650,7 +1645,8 @@ function renderPanel() {
 
     /* duplicate master rows, side by side */
     const dupSec = !a.master_dup_ids.length ? "" : (() => {
-      const master = effectiveMaster() || [];
+      const master = (effectiveMaster() || [])
+        .filter(m2 => !outOfScope(m2, state.links || {}));
       const byId = {};
       for (const m of master) (byId[m.id] = byId[m.id] || []).push(m);
       const FIELDS = [["county", "County"], ["county_id", "CountyID"],
@@ -1744,7 +1740,6 @@ function renderPanel() {
     })();
 
     p.innerHTML =
-      rangeSec +
       section("Sheet says timing is done but no timing file exists",
         "The master timing column reads as done, yet no timing database is in "
         + "the folder. Any non timing file sharing the ID is shown so you can "
@@ -1769,6 +1764,7 @@ function renderPanel() {
       linkSec + dupSec ||
       `<div class="empty">No anomalies.</div>`;
     if (!anomalyCount(a)) p.innerHTML = `<div class="empty">No anomalies.</div>`;
+    p.insertAdjacentHTML("beforeend", oosSec);
 
     p.onclick = ev => {
       const b = ev.target.closest(
@@ -1853,37 +1849,6 @@ function renderPanel() {
       if (!text) { toast("Nothing decided yet"); return; }
       copyText(text, (rowsOut.length + newsOut.length) + " ID assignments");
     };
-    const br = document.getElementById("btnCopyRange");
-    if (br) br.onclick = () => {
-      const { g, counties, evidence, below, above } = rangeAgg;
-      const n1 = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-      const lines = [
-        `The MaxTime links sheet covers IDs ${g.lo} to ${g.hi}`
-          + ` (${g.link_count} signals).`,
-        n1(g.rows.length, "master sheet row carries", "master sheet rows carry")
-          + ` a numeric ID outside that range`
-          + ` (${below} below, ${above} above).`,
-        `By county:`,
-      ];
-      for (const [co, c] of counties)
-        lines.push(`  ${co}: ${n1(c.total, "row", "rows")}`
-          + ` (${c.below} below, ${c.above} above)`
-          + (c.timing ? `, ${c.timing} already`
-            + ` ${c.timing === 1 ? "has" : "have"} a timing file` : "")
-          + (c.other ? `, ${c.other}`
-            + ` ${c.other === 1 ? "has" : "have"} a non timing file` : ""));
-      lines.push(evidence.length
-        ? (evidence.length === 1
-            ? `One ID already has a timing file in SharePoint: `
-            : `These IDs already have a timing file in SharePoint: `)
-          + evidence.map(x => x.id).join(", ")
-          + `. That suggests the links export is incomplete.`
-        : `None of these IDs has a timing file in SharePoint yet.`);
-      lines.push(`Question: is there another links export that covers these`
-        + ` signals, or are they city maintained and out of scope for this`
-        + ` task? If out of scope, should their timing column read NA?`);
-      copyText(lines.join("\n"), "summary for the supervisor");
-    };
     const bd = document.getElementById("btnCopyDupRes");
     if (bd) bd.onclick = () => {
       const lines = a.master_dup_ids.map(d => {
@@ -1902,9 +1867,12 @@ function renderPanel() {
       timing file. The folder holds ${result.info.timing_file_count} timing
       files, ${result.info.key_file_count} key files, and
       ${result.info.ignored_count} other files that were ignored.
-      ${result.info.master_not_in_links.length} master IDs have no MaxTime
-      link at all (mostly Lexington signals); the anomalies tab breaks the
-      out of range ones down by county for the supervisor question.</p>
+      ${result.info.master_not_in_links.length} master IDs inside the
+      jurisdiction have no MaxTime link at all. The
+      ${result.info.out_of_scope.rows} out of jurisdiction rows
+      (${h(OUT_OF_SCOPE_COUNTY.charAt(0)
+        + OUT_OF_SCOPE_COUNTY.slice(1).toLowerCase())} County, and IDs below
+      ${JURISDICTION_MIN_ID}) are not in this list or any other.</p>
       <div class="card" style="font:12px ui-monospace,Consolas,monospace;
         max-height:260px;overflow:auto">${result.info.master_not_in_links
           .map(h).join(", ")}</div></div>`;
@@ -1940,7 +1908,7 @@ function loadDemo() {
     M(9, "7014", "CEDAR", "34", "SR 55", "PARK LOOP", "na", "Loops", "FR", ""),
     M(10, "7016", "CEDAR", "34", "SR 55", "FAIRGROUNDS", "", "Wavetronix", "box", ""),
     M(11, "7018", "CEDAR", "34", "SR 55", "OLD KILN RD", "", "Loops", "", ""),
-    /* IDs below the links sheet's range, for the range gap card */
+    /* IDs below 4000: out of jurisdiction, left alone everywhere */
     M(12, "0312", "CEDAR", "34", "US 42", "QUARRY RD", "", "", "", ""),
     M(13, "45", "MAPLE", "12", "US 10", "MILLPOND LN", "", "", "", ""),
   ];
@@ -1956,7 +1924,7 @@ function loadDemo() {
     "099_7014_SR55@PARK_LOOP",           // wrong county prefix
     "034_ 7016_SR55@FAIRGROUNDS_AWF_Flush",  // subsystem file, not timing
     "new012_7020_US10@NEW_RD",           // new prefix, matched by id
-    "034_0312_US42@QUARRY_RD",           // timing file for an out of range id
+    "034_0312_US42@QUARRY_RD",           // file for an out of jurisdiction id
     "034_8888_MYSTERY_SIGNAL",           // unknown id
     "067-0000_SR57@SR1970_ICWS",         // subsystem file, invalid id
     "0000_D7_MaxTime Links.xlsx",        // ignored

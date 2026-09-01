@@ -49,6 +49,11 @@ separate list flags the ones whose names should be standardized.
   duplicate rows inside the master sheet, and rows claiming a timing file that
   does not exist (with any non timing file that shares the ID, so a misnamed
   file is easy to spot).
+- **Out of jurisdiction**: signal IDs below 4000 are Fayette County, which the
+  district does not maintain. Those master rows are set aside before every
+  cross reference above, so nothing suggests work on them and their timing
+  column goes back to the sheet untouched. The anomalies tab shows the count
+  and the county breakdown, and nothing else.
 
 ![Anomaly view with synthetic demo data](docs/demo_anomalies.png)
 
