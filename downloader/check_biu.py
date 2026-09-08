@@ -154,7 +154,15 @@ def stable_tables(page):
     stable_since = time.monotonic()
     until = time.monotonic() + 15
     while time.monotonic() < until:
-        tables = page.evaluate(TABLES_JS)
+        # Some controller firmware renders the IO screen inside an iframe.
+        # Inspect every frame while retaining the same strict table rules.
+        tables = []
+        for frame in page.frames:
+            try:
+                tables.extend(frame.evaluate(TABLES_JS))
+            except Exception:
+                # A frame can disappear during navigation; retry on the next poll.
+                continue
         if tables != previous:
             stable_since = time.monotonic()
             previous = tables
@@ -206,14 +214,16 @@ def setup(page, row, path):
 def inspect_modules(page, profile):
     if page.locator('input[type=password]:visible').count():
         raise RuntimeError('Still on login page')
-    if not page.get_by_text(re.compile(r'^IO Modules$', re.I)).filter(visible=True).count():
+    if not any(frame.get_by_text(re.compile(r'^IO Modules$', re.I)).filter(visible=True).count()
+               for frame in page.frames):
         raise RuntimeError('IO Modules page marker missing')
     tables = stable_tables(page)
     matches = [t for t in tables if t['rows'][0] == profile['headers']]
     if len(matches) != 1:
         raise RuntimeError('Module table is missing or ambiguous')
     # Any visible pagination control makes an absence result unsafe.
-    if page.get_by_role('button', name=re.compile(r'^(?:next|next page|load more)$', re.I)).filter(visible=True).count():
+    if any(frame.get_by_role('button', name=re.compile(r'^(?:next|next page|load more)$', re.I)).filter(visible=True).count()
+           for frame in page.frames):
         raise RuntimeError('Pagination present; table may be incomplete')
     return matches[0]['rows']
 
@@ -233,13 +243,16 @@ def main():
     args = ap.parse_args()
     if args.limit < 1 or args.delay < 0:
         ap.error('limit must be positive and delay nonnegative')
-    rows = read_worklist(args.csv)
+    worklist = read_worklist(args.csv)
+    rows = worklist
     if args.only:
         rows = [r for r in rows if r['id'] == args.only]
     if not args.all:
         rows = rows[:args.limit]
     if not rows:
-        ap.error('No matching controller in the exported worklist')
+        available = ', '.join(r['id'] for r in worklist)
+        ap.error(f"No matching controller ID {args.only!r} in the exported worklist. "
+                 f"Available IDs: {available}")
     from playwright.sync_api import sync_playwright
     profile = None
     if not args.setup:
