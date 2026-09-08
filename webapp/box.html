@@ -1,0 +1,1208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MaxTime Box Triage</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --ink: #1c2733; --muted: #5b6b7b;
+    --line: #dde3ea; --accent: #0f62fe; --ok: #1f7a3d; --warn: #b45309;
+    --bad: #b3261e; --chip: #eef2f7;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  header { background: #14212f; color: #fff; padding: 14px 22px;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header .sub { color: #9db2c7; font-size: 12.5px; }
+  header .spacer { flex: 1; }
+  header a { color: #9db2c7; font-size: 12.5px; }
+  header button { background: #24384d; color: #dbe7f3; border: 1px solid #3a5270; }
+  main { max-width: 1240px; margin: 0 auto; padding: 18px 22px 60px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; }
+  .card h2 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: .6px; color: var(--muted); }
+  .drop { border: 2px dashed var(--line); border-radius: 8px; padding: 14px;
+    text-align: center; color: var(--muted); cursor: pointer; transition: .15s; }
+  .drop.hover { border-color: var(--accent); background: #f0f5ff; color: var(--accent); }
+  .filestate { margin-top: 8px; font-size: 13px; }
+  .filestate .got { color: var(--ok); font-weight: 600; }
+  .filestate .miss { color: var(--muted); }
+  textarea { width: 100%; min-height: 64px; border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px; font: 12px/1.4 ui-monospace, Consolas, monospace; }
+  button { font: inherit; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: #fff; color: var(--ink); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px; margin: 6px 0 16px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; cursor: pointer; }
+  .stat b { display: block; font-size: 26px; font-weight: 700; }
+  .stat span { color: var(--muted); font-size: 12.5px; }
+  .stat.active { border-color: var(--accent); box-shadow: 0 0 0 2px #0f62fe22; }
+  .stat b.n-bad { color: var(--bad); } .stat b.n-warn { color: var(--warn); }
+  .stat b.n-ok { color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+    vertical-align: top; }
+  th { background: #f0f3f7; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .5px; color: var(--muted); position: sticky; top: 0; }
+  tr:last-child td { border-bottom: 0; }
+  tr.settled td { background: #f2faf4; color: #6d7f74; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .chip { background: var(--chip); border-radius: 6px; padding: 1px 7px;
+    font: 12px ui-monospace, Consolas, monospace; }
+  .bar { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+  .bar .note { color: var(--muted); font-size: 12.5px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .why { font-size: 10.5px; border-radius: 5px; padding: 1px 6px; margin-right: 5px;
+    text-transform: uppercase; letter-spacing: .4px; white-space: nowrap;
+    display: inline-block; }
+  .why.w-blank { background: var(--chip); color: var(--muted); }
+  .why.w-unsure { background: #fbe4e2; color: var(--bad); }
+  .why.w-emailed { background: #fff3cd; color: var(--warn); }
+  .why.w-nofile { background: #fbe4e2; color: var(--bad); }
+  .why.w-box { background: #e8f0fe; color: var(--accent); }
+  .why.w-unclear { background: #fff3cd; color: var(--warn); }
+  .why.w-noip { background: #eeeeef; color: var(--muted); }
+  .res { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .res button { padding: 3px 9px; font-size: 12.5px; border-radius: 6px; }
+  .res button.on-yes { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .res button.on-no { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .step { background: #fff; border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0; padding: 12px 16px; margin-bottom: 14px; }
+  .step ol { margin: 6px 0 0; padding-left: 20px; }
+  .step li { margin: 3px 0; }
+  .step code { background: var(--chip); border-radius: 5px; padding: 1px 6px;
+    font: 12.5px ui-monospace, Consolas, monospace; }
+  td.locked { background: #f6f3ec; color: #6a5f49; }
+  td.locked .lock { font-size: 11px; margin-right: 4px; opacity: .75; }
+  .auto { color: var(--ok); font-style: italic; }
+  .tag { font-size: 10.5px; border-radius: 5px; padding: 0 5px; margin-left: 6px;
+    text-transform: uppercase; letter-spacing: .4px; }
+  .tag.t-auto { background: #e3f4e8; color: var(--ok); }
+  .tag.t-field { background: #fbe4e2; color: var(--bad); }
+  .tag.t-oos { background: #eeeeef; color: var(--muted); }
+  tr.oos td { opacity: .55; }
+  .ov-old { text-decoration: line-through; color: var(--muted); margin-right: 6px; }
+  .ov-new { color: var(--bad); font-weight: 600; }
+  input.filter { border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 10px; font: inherit; width: 220px; }
+  input.notebox { border: 1px solid var(--line); border-radius: 6px;
+    padding: 3px 7px; font: inherit; font-size: 12.5px; width: 100%;
+    max-width: 260px; margin-top: 4px; display: block; }
+  .anom h3 { margin: 18px 0 6px; font-size: 14px; }
+  .anom p.exp { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+  .mono { font: 12px ui-monospace, Consolas, monospace; }
+  .empty { padding: 26px; text-align: center; color: var(--muted);
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
+  .privacy { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: #14212f; color: #fff; padding: 9px 16px; border-radius: 8px;
+    opacity: 0; transition: .25s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MaxTime Box Triage</h1>
+  <div class="sub">Clickbox configuration coverage, computed locally, nothing uploaded</div>
+  <div class="spacer"></div>
+  <a href="index.html">Timing triage</a>
+  <button id="btnDemo">Load demo data</button>
+  <button id="btnClear">Clear saved data</button>
+</header>
+<main>
+  <div class="cards" id="inputs">
+    <div class="card">
+      <h2>1. The two sheets</h2>
+      <div class="drop" id="dropXlsx">Drop the signal links sheet and the district
+        master sheet here, or click to pick them</div>
+      <input type="file" id="pickXlsx" accept=".xlsx" multiple>
+      <div class="filestate" id="stateXlsx"></div>
+    </div>
+    <div class="card">
+      <h2>2. The clickbox configuration folder</h2>
+      <div class="drop" id="dropFolder">Click to pick the synced SharePoint clickbox
+        configuration folder, or drop the folder, a CSV export, or a txt listing here</div>
+      <input type="file" id="pickFolder" webkitdirectory>
+      <div class="filestate" id="stateFolder"></div>
+      <details style="margin-top:8px"><summary style="cursor:pointer;color:#5b6b7b;
+        font-size:12.5px">or paste the file names</summary>
+        <textarea id="pasteBox" placeholder="one filename per line"></textarea>
+        <button id="btnPaste" style="margin-top:6px">Use pasted list</button>
+      </details>
+    </div>
+    <div class="card">
+      <h2>What this shows</h2>
+      <p style="margin:0;font-size:13px">Which signals still need a look at the
+        controller, which already have a clickbox configuration file in SharePoint
+        and only need the sheet labelled, and what to paste back into the
+        Detection, Box and Box Verified columns.</p>
+      <p class="privacy">Everything is read in this browser. No network calls, no
+        upload, no telemetry. File names only, never file contents.</p>
+    </div>
+  </div>
+  <div id="results" style="display:none">
+    <div class="summary" id="summary"></div>
+    <div class="tabs" id="tabs"></div>
+    <div id="panel"></div>
+  </div>
+  <div id="placeholder" class="empty">Waiting for both sheets. The clickbox folder
+    listing is optional: without it every signal counts as not yet in SharePoint.</div>
+</main>
+<footer id="stamp"></footer>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const BUILD = "v0.1.0, built 2026-09-08";
+document.getElementById("stamp").textContent =
+  "MaxTime Box Triage " + BUILD + ". Local only: no network calls, no telemetry.";
+
+/* ---------- tiny zip + xlsx reader (no libraries) ---------- */
+async function unzip(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  let i = buf.byteLength - 22;
+  while (i >= 0 && dv.getUint32(i, true) !== 0x06054b50) i--;
+  if (i < 0) throw new Error("not a zip file");
+  const count = dv.getUint16(i + 10, true);
+  let off = dv.getUint32(i + 16, true);
+  const entries = {};
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(off, true) !== 0x02014b50) throw new Error("bad zip directory");
+    const method = dv.getUint16(off + 10, true);
+    const csize = dv.getUint32(off + 20, true);
+    const nameLen = dv.getUint16(off + 28, true);
+    const extraLen = dv.getUint16(off + 30, true);
+    const commentLen = dv.getUint16(off + 32, true);
+    const lho = dv.getUint32(off + 42, true);
+    const name = new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nameLen));
+    entries[name] = { method, csize, lho };
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  return {
+    names: Object.keys(entries),
+    async read(name) {
+      const e = entries[name];
+      if (!e) return null;
+      const nl = dv.getUint16(e.lho + 26, true), xl = dv.getUint16(e.lho + 28, true);
+      const start = e.lho + 30 + nl + xl;
+      const comp = u8.subarray(start, start + e.csize);
+      if (e.method === 0) return new TextDecoder().decode(comp);
+      const stream = new Blob([comp]).stream()
+        .pipeThrough(new DecompressionStream("deflate-raw"));
+      return await new Response(stream).text();
+    }
+  };
+}
+
+function colOf(ref) {
+  let n = 0;
+  for (const ch of ref) {
+    const c = ch.charCodeAt(0);
+    if (c >= 65 && c <= 90) n = n * 26 + c - 64; else break;
+  }
+  return n;
+}
+
+async function readWorkbook(buf) {
+  const z = await unzip(buf);
+  const xml = s => new DOMParser().parseFromString(s, "application/xml");
+  const wb = xml(await z.read("xl/workbook.xml"));
+  const rels = xml(await z.read("xl/_rels/workbook.xml.rels"));
+  const relMap = {};
+  for (const r of rels.getElementsByTagName("Relationship"))
+    relMap[r.getAttribute("Id")] = r.getAttribute("Target").replace(/^\/?(xl\/)?/, "xl/");
+  const shared = [];
+  const ssRaw = await z.read("xl/sharedStrings.xml");
+  if (ssRaw) {
+    for (const si of xml(ssRaw).documentElement.children) {
+      let s = "";
+      for (const t of si.getElementsByTagName("t")) s += t.textContent;
+      shared.push(s);
+    }
+  }
+  const sheets = {};
+  for (const s of wb.getElementsByTagName("sheet")) {
+    const rid = s.getAttribute("r:id") ||
+      s.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id");
+    sheets[s.getAttribute("name")] = relMap[rid];
+  }
+  return {
+    sheetNames: Object.keys(sheets),
+    async rows(sheetName) {
+      const doc = xml(await z.read(sheets[sheetName]));
+      const out = [];
+      for (const row of doc.getElementsByTagName("row")) {
+        const r = {};
+        for (const c of row.getElementsByTagName("c")) {
+          const t = c.getAttribute("t");
+          let val = "";
+          if (t === "inlineStr") {
+            for (const tt of c.getElementsByTagName("t")) val += tt.textContent;
+          } else {
+            const v = c.getElementsByTagName("v")[0];
+            if (v) val = t === "s" ? shared[+v.textContent] : v.textContent;
+          }
+          r[colOf(c.getAttribute("r"))] = val;
+        }
+        out.push([+row.getAttribute("r"), r]);
+      }
+      return out;
+    }
+  };
+}
+
+/* ================= LOGIC-START =================
+   Pure functions, no DOM. tools/verify_box.py pulls this block out of the
+   file and runs it under node against the real sheets. Keep it free of
+   document, window and localStorage. */
+
+const S = v => String(v == null ? "" : v).trim();
+const idCmp = (a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+const colLetter = n => { let s = "";
+  while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s;
+    n = Math.floor((n - 1) / 26); } return s; };
+
+/* ---------- jurisdiction, same rule as the timing tool ----------
+   Signal IDs below 4000 are Fayette County, which this district does not
+   maintain. Those rows take no part in any count and their three columns
+   paste back exactly as the sheet has them. A row whose ID MaxTime knows is
+   ours whatever its county cell says, so that check comes first. */
+const JURISDICTION_MIN_ID = 4000;
+const OUT_OF_SCOPE_COUNTY = "FAYETTE";
+
+function outOfScope(m, links) {
+  const sid = S(m.id);
+  if (links && sid && sid in links) return false;
+  if (/^\d+$/.test(sid) && parseInt(sid, 10) < JURISDICTION_MIN_ID) return true;
+  return S(m.county).toUpperCase() === OUT_OF_SCOPE_COUNTY;
+}
+
+/* ---------- sheet parsing ---------- */
+function findCol(header, needles, exact) {
+  for (const [col, text] of Object.entries(header)) {
+    const t = S(text).toLowerCase();
+    if (exact != null && t === exact.toLowerCase()) return +col;
+    if (needles && needles.length && needles.every(n => t.includes(n.toLowerCase())))
+      return +col;
+  }
+  return null;
+}
+
+function parseLinks(rows) {
+  const header = rows[0][1];
+  const c = {
+    id: findCol(header, null, "ID"), county: findCol(header, null, "County"),
+    main: findCol(header, null, "Main"), side: findCol(header, null, "Side"),
+    ip: findCol(header, null, "IP"), port: findCol(header, null, "Port"),
+  };
+  const out = {};
+  for (const [rownum, r] of rows.slice(1)) {
+    const sid = S(r[c.id]);
+    if (!sid) continue;
+    const ip = S(r[c.ip]), port = S(r[c.port]);
+    out[sid] = { row: rownum, county: S(r[c.county]), main: S(r[c.main]),
+      side: S(r[c.side]), ip, port,
+      url: ip && port ? `http://${ip}:${port}/maxtime/` : "",
+      box_url: ip ? `http://${ip}:57150/` : "" };
+  }
+  return out;
+}
+
+/* The box confirmation column, under its old name ("Box Verified & saved to CO
+   sharepoint") or the renamed one ("Box Configuration Downloaded"). */
+function findBoxDoneCol(header) {
+  for (const [col, text] of Object.entries(header)) {
+    const t = S(text).toLowerCase();
+    if (t.includes("box") &&
+        ["verif", "confirm", "config", "download"].some(w => t.includes(w)))
+      return +col;
+  }
+  return null;
+}
+
+/* A row is kept when any captured cell carries content. This is wider than
+   the timing tool's test, which ignores the three box columns: here a row
+   that carries only a box value must survive, or a blank line would be
+   pasted over it. */
+function parseMaster(rows) {
+  const header = rows[0][1];
+  const c = {
+    id: findCol(header, null, "ID#"), county: findCol(header, ["county"]),
+    cid: findCol(header, null, "CountyID"), s1: findCol(header, null, "Street 1"),
+    s2: findCol(header, null, "Street 2"), ab: findCol(header, ["timing", "sharepoint"]),
+    det: findCol(header, null, "Detection"), boxfr: findCol(header, ["box", "rack"]),
+    boxdone: findBoxDoneCol(header),
+  };
+  const out = [];
+  for (const [rownum, r] of rows.slice(1)) {
+    const sid = S(r[c.id]);
+    const any = [c.county, c.s1, c.s2, c.ab, c.det, c.boxfr, c.boxdone]
+      .some(col => S(r[col]));
+    if (!sid && !any) continue;
+    out.push({ row: rownum, id: sid, county: S(r[c.county]), county_id: S(r[c.cid]),
+      s1: S(r[c.s1]), s2: S(r[c.s2]), status: S(r[c.ab]),
+      detection: S(r[c.det]), box_fr: S(r[c.boxfr]), box_done: S(r[c.boxdone]) });
+  }
+  const meta = out.length ? {
+    firstRow: Math.min(...out.map(r => r.row)),
+    lastRow: Math.max(...out.map(r => r.row)),
+    cols: { id: c.id, county: c.county, s1: c.s1, s2: c.s2,
+      det: c.det, boxfr: c.boxfr, boxdone: c.boxdone },
+  } : null;
+  return { rows: out, meta };
+}
+
+/* ---------- clickbox configuration file names ----------
+   An export is named by whoever pressed Export Configuration, and it carries
+   the export's own date and time, so one signal legitimately appears more
+   than once under different names. Files are matched to signals by the four
+   digit ID found anywhere in the name; the rest of the name is only read to
+   say whether it also names the intersection. */
+const ID_TOKEN_RE = /(?<![0-9A-Za-z])(\d{4})(?![0-9])/g;
+const LEADING_COUNTY_RE = /^(?:new)?(\d{3})[ _-]/;
+const IGNORE_EXTS = new Set(["xlsx", "xls", "csv", "pdf", "ini", "lnk", "url",
+  "zip", "docx", "doc", "png", "jpg", "jpeg", "gif"]);
+/* Export stamps: 20260908, 2026-09-08, 9-8-26, 14_32_07, and bare clock runs. */
+const STAMP_RES = [
+  /\b\d{8}\b/g, /\b\d{4}[-_.]\d{2}[-_.]\d{2}\b/g,
+  /\b\d{1,2}[-_.]\d{1,2}[-_.]\d{2,4}\b/g, /\b\d{2}[-_.:]\d{2}([-_.:]\d{2})?\b/g,
+  /\b\d{6}\b/g,
+];
+/* Words every export carries, which say nothing about the intersection. */
+const BOILERPLATE = new Set(["CONFIG", "CONFIGURATION", "CONFIGS", "CLICKBOX",
+  "CLICK", "BOX", "EXPORT", "EXPORTED", "BACKUP", "COPY", "NEW", "OLD",
+  "FINAL", "REV", "DATA", "FILE", "SIGNAL", "KYTC", "DISTRICT", "D7",
+  "AM", "PM", "V1", "V2"]);
+const ROUTE_PREFIXES = new Set(["US", "KY", "I", "SR", "CR"]);
+const DIR_TOKENS = new Set(["N", "S", "E", "W", "NB", "SB", "EB", "WB"]);
+const NAME_STOPWORDS = new Set(["ST", "RD", "DR", "AVE", "LN", "PIKE", "BLVD",
+  "PKWY", "WAY", "STREET", "ROAD", "THE", "AT", "AND"]);
+
+function nameTokens(s) {
+  const parts = String(s == null ? "" : s).toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ").split(" ").filter(Boolean);
+  const out = new Set();
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (ROUTE_PREFIXES.has(p) && i + 1 < parts.length && /^\d+$/.test(parts[i + 1])) {
+      out.add(p + parts[i + 1]); i++; continue;
+    }
+    if (DIR_TOKENS.has(p)) { out.add(p); continue; }
+    if (!NAME_STOPWORDS.has(p) && (p.length > 2 || /^\d+$/.test(p))) out.add(p);
+  }
+  return out;
+}
+
+function extOf(name) {
+  const base = name.split("/").pop();
+  if (base.includes(".") && !base.startsWith("."))
+    return base.split(".").pop().toLowerCase();
+  return "";
+}
+
+/* {name, id, ids, county_prefix, kind, leftover, words}
+   kind: "clickbox" once an ID is recognized, "unmatched" when no known ID
+   appears in the name, "ignore" for spreadsheets and system files. */
+function classifyClickboxFile(name, validIds) {
+  const base = S(name).replace(/\\/g, "/").split("/").pop();
+  const out = { name: base, id: null, ids: [], county_prefix: null,
+    kind: "ignore", leftover: "", words: [] };
+  if (!base || base.startsWith(".") || base.toLowerCase() === "desktop.ini")
+    return out;
+  const ext = extOf(base);
+  if (IGNORE_EXTS.has(ext)) return out;
+
+  const all = base.match(ID_TOKEN_RE) || [];
+  out.ids = [...new Set(all.filter(t => validIds.has(t)))];
+  out.id = out.ids.length ? out.ids[0] : null;
+  const cm = LEADING_COUNTY_RE.exec(base);
+  if (cm) out.county_prefix = cm[1];
+  out.kind = out.id === null ? "unmatched" : "clickbox";
+
+  /* strip the parts every export name has, and see what is left */
+  let rest = ext ? base.slice(0, base.length - ext.length - 1) : base;
+  if (cm) rest = rest.slice(cm[0].length);
+  for (const id of out.ids) rest = rest.split(id).join(" ");
+  for (const re of STAMP_RES) rest = rest.replace(re, " ");
+  out.leftover = rest.replace(/[_\-.]+/g, " ").replace(/\s+/g, " ").trim();
+  /* a bare number left over is an export stamp, never an intersection */
+  out.words = [...nameTokens(out.leftover)]
+    .filter(w => !BOILERPLATE.has(w) && !/^\d+$/.test(w));
+  return out;
+}
+
+/* ---------- what the sheet already records ---------- */
+const UNSURE_RE = /\?/;
+const PENDING_RE = /email|no comm|not yet|needs|field check|program/i;
+const SAVED_RE = /\byes\b|confirm|download|saved|sharepoint|share ?point|\bdone\b/i;
+const NOBOX_RE = /^n\/?a$|^none$|^no$|\bfront\b|\bfr\b|\bf\/r\b/i;
+const HASBOX_RE = /\bbox\b/i;
+
+/* One master row's standing on the box work.
+
+   status is one of:
+     "have"     a clickbox file for this ID is in SharePoint
+     "check"    still needs the controller opened
+     "settled"  the sheet records no box and SharePoint agrees there is none
+     "oos"      outside the district's jurisdiction
+
+   SharePoint is the source of truth: a row claiming the box was saved with no
+   file behind it is a check, not a finish. */
+function boxRowState(m, files, hasLink) {
+  const fr = S(m.box_fr), done = S(m.box_done);
+  const unsure = UNSURE_RE.test(fr) || UNSURE_RE.test(done);
+  const pending = PENDING_RE.test(done) || PENDING_RE.test(fr);
+  const claims = SAVED_RE.test(done);
+  const nobox = NOBOX_RE.test(fr) || NOBOX_RE.test(done);
+  const hasbox = HASBOX_RE.test(fr);
+  const why = [];
+
+  if (files.length) {
+    if (!claims) why.push("label");
+    return { status: "have", why, unsure, pending, claims, nobox, hasbox };
+  }
+  if (claims) { why.push("nofile"); return { status: "check", why, unsure, pending, claims, nobox, hasbox }; }
+  if (unsure) why.push("unsure");
+  if (pending) why.push("emailed");
+  if (hasbox) why.push("box");
+  if (!fr && !done) why.push("blank");
+  if (nobox && !unsure && !pending)
+    return { status: "settled", why: [], unsure, pending, claims, nobox, hasbox };
+  if (!why.length) why.push((fr || done) ? "unclear" : "blank");
+  if (!hasLink) why.push("noip");
+  return { status: "check", why, unsure, pending, claims, nobox, hasbox };
+}
+
+const WHY_TEXT = {
+  blank: "never checked",
+  unsure: "sheet is unsure",
+  emailed: "waiting on someone",
+  nofile: "sheet says saved, no file",
+  box: "box, config not downloaded",
+  unclear: "box column says something else",
+  label: "label the sheet",
+  noip: "no IP in the links sheet",
+};
+
+/* ---------- the cross reference ---------- */
+function analyzeBox(links, master, filenames) {
+  const validIds = new Set();
+  for (const i of Object.keys(links)) if (/^\d{4}$/.test(i)) validIds.add(i);
+  for (const m of master) if (/^\d{4}$/.test(S(m.id))) validIds.add(S(m.id));
+
+  const files = (filenames || []).filter(n => S(n))
+    .map(n => classifyClickboxFile(n, validIds));
+  const clickbox = files.filter(f => f.kind === "clickbox");
+  const byId = {};
+  for (const f of clickbox) (byId[f.id] = byId[f.id] || []).push(f);
+
+  const rows = [], check = [], have = [], label = [], settled = [], oos = [];
+  const seen = new Set();
+  for (const m of master) {
+    const sid = S(m.id);
+    if (!sid) continue;
+    if (outOfScope(m, links)) { oos.push(m); continue; }
+    if (seen.has(sid)) continue;          // duplicate master rows: first wins
+    seen.add(sid);
+    const lk = links[sid] || null;
+    const mine = byId[sid] || [];
+    const st = boxRowState(m, mine, !!(lk && lk.ip));
+    const e = { ...m, ...st, files: mine, link: lk,
+      url: lk ? lk.url : "", box_url: lk ? lk.box_url : "",
+      main: lk ? lk.main : "", side: lk ? lk.side : "" };
+    /* the file names that carry this ID but do not name the intersection */
+    const mtok = new Set([...nameTokens(m.s1), ...nameTokens(m.s2),
+      ...nameTokens(e.main), ...nameTokens(e.side)]);
+    e.bad_names = mine.filter(f => !f.words.length ||
+      (mtok.size && !f.words.some(w => mtok.has(w))));
+    rows.push(e);
+    if (st.status === "check") check.push(e);
+    else if (st.status === "have") { have.push(e); if (st.why.includes("label")) label.push(e); }
+    else settled.push(e);
+  }
+
+  const noip = check.filter(e => !e.link || !e.link.ip);
+  const masterIds = new Set(rows.map(e => S(e.id)));
+  const notInMaster = Object.keys(links)
+    .filter(i => /^\d{4}$/.test(i) && !masterIds.has(i))
+    .sort(idCmp).map(i => ({ id: i, ...links[i] }));
+
+  const fileFlags = {
+    unmatched: files.filter(f => f.kind === "unmatched").sort(byName),
+    noName: clickbox.filter(f => !f.words.length).sort(byName),
+    multiId: clickbox.filter(f => f.ids.length > 1).sort(byName),
+    orphan: clickbox.filter(f => !masterIds.has(f.id)).sort(byName),
+  };
+  /* the intersection check needs the sheet, so it is collected per row above */
+  fileFlags.nameOff = [];
+  for (const e of rows)
+    for (const f of e.bad_names)
+      if (f.words.length) fileFlags.nameOff.push({ ...f, row: e });
+  fileFlags.nameOff.sort(byName);
+
+  const dupIds = Object.keys(byId).filter(i => byId[i].length > 1).sort(idCmp);
+
+  return { rows, check, have, label, settled, oos, noip, notInMaster,
+    files, clickbox, byId, dupIds, fileFlags };
+}
+
+function byName(a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; }
+
+/* ---------- the three sheet columns ----------
+   One entry per master sheet row from the first to the last, so a copied
+   column pastes row aligned over the sheet's own column. What the sheet
+   already says is the base and always survives unless a field result was
+   recorded for that signal. Autofill only ever fills a blank cell. */
+const AUTO_VERIFIED = "already in sharepoint";
+
+function computeColumns(result, master, meta, found) {
+  if (!meta) return null;
+  const byRow = {};
+  for (const m of master) byRow[m.row] = m;
+  const state = {};
+  for (const e of result.rows) state[S(e.id)] = e;
+
+  const out = { det: [], boxfr: [], boxdone: [], cols: meta.cols,
+    firstRow: meta.firstRow, lastRow: meta.lastRow };
+  for (let r = meta.firstRow; r <= meta.lastRow; r++) {
+    const m = byRow[r];
+    const base = { det: m ? m.detection : "", boxfr: m ? m.box_fr : "",
+      boxdone: m ? m.box_done : "" };
+    const home = m ? state[S(m.id)] : null;
+    /* a second master row carrying the same ID is not this signal's home row,
+       so nothing is written into it */
+    const e = (home && home.row === m.row) ? home : null;
+    const dup = !!(home && !e);
+    const f = (e && found) ? found[S(m.id)] : null;
+    const mk = (key, value, kind) =>
+      ({ row: r, id: m ? S(m.id) : "", s1: m ? m.s1 : "", s2: m ? m.s2 : "",
+         county: m ? m.county : "", base: base[key], out: value,
+         kind: kind || "base" });
+
+    if (!m || !e) {          /* out of jurisdiction, no ID, or a duplicate row */
+      const k = dup ? "dup" : (m && S(m.id) ? "oos" : "base");
+      out.det.push(mk("det", base.det, k));
+      out.boxfr.push(mk("boxfr", base.boxfr, k));
+      out.boxdone.push(mk("boxdone", base.boxdone, k));
+      continue;
+    }
+
+    /* Detection: a BIU found in the field means radar, so a sheet that still
+       says Loops or was never set is corrected. No BIU proves nothing about
+       what the detection is, so it is left alone. */
+    let det = base.det, detKind = "base";
+    if (f && f.biu === "yes" && !/wavetronix|radar/i.test(base.det)) {
+      det = "Wavetronix"; detKind = "field";
+    }
+    out.det.push(mk("det", det, detKind));
+
+    /* Box or Front rack */
+    let bf = base.boxfr, bfKind = "base";
+    if (f && f.biu === "yes") { bf = "BOX"; bfKind = "field"; }
+    else if (f && f.biu === "no") { bf = "N/A"; bfKind = "field"; }
+    else if (e.files.length && !base.boxfr) { bf = "BOX"; bfKind = "auto"; }
+    out.boxfr.push(mk("boxfr", bf, bfKind));
+
+    /* Box Verified and saved to sharepoint */
+    let bd = base.boxdone, bdKind = "base";
+    if (f && f.saved) { bd = "YES"; bdKind = "field"; }
+    else if (f && f.biu === "no" && !base.boxdone) { bd = "N/A"; bdKind = "field"; }
+    else if (e.files.length && !base.boxdone) { bd = AUTO_VERIFIED; bdKind = "auto"; }
+    out.boxdone.push(mk("boxdone", bd, bdKind));
+  }
+  return out;
+}
+
+/* ================= LOGIC-END ================= */
+
+/* ---------- storage and state ---------- */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("mtb." + k);
+    return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("mtb." + k, JSON.stringify(v)); }
+    catch (e) {} },
+  del(k) { try { localStorage.removeItem("mtb." + k); } catch (e) {} },
+};
+let state = {
+  links: store.get("links", null),
+  master: store.get("master", null),
+  masterMeta: store.get("masterMeta", null),
+  listing: store.get("listing", null),
+  listingLabel: store.get("listingLabel", ""),
+  found: store.get("found", {}),   // signal id -> {biu:"yes"|"no", saved, note}
+  tab: store.get("tab", "check"),
+  filter: "",
+  hideDone: store.get("hideDone", false),
+};
+let result = null, columns = null;
+
+function saveFound() { store.set("found", state.found); }
+function foundOf(id) { return state.found[id] || null; }
+function setFound(id, patch) {
+  const cur = state.found[id] || {};
+  const next = { ...cur, ...patch };
+  if (next.biu == null && !next.saved && !S(next.note)) delete state.found[id];
+  else state.found[id] = next;
+  saveFound(); refresh();
+}
+
+/* ---------- small helpers ---------- */
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2200);
+}
+async function copyText(text, label) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  toast("Copied " + label);
+}
+function downloadCSV(name, rows) {
+  const esc = v => /[",\n]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
+  const text = rows.map(r => r.map(esc).join(",")).join("\r\n") + "\r\n";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+const h = s => String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* ---------- inputs ---------- */
+async function ingestXlsx(files) {
+  for (const f of files) {
+    if (!/\.xlsx$/i.test(f.name)) continue;
+    try {
+      const wb = await readWorkbook(await f.arrayBuffer());
+      if (wb.sheetNames.includes("system information")) {
+        state.links = parseLinks(await wb.rows("system information"));
+        store.set("links", state.links);
+        toast("Loaded links sheet: " + Object.keys(state.links).length + " signals");
+      } else if (wb.sheetNames.includes("MASTER SIGNAL LIST")) {
+        const parsed = parseMaster(await wb.rows("MASTER SIGNAL LIST"));
+        state.master = parsed.rows; state.masterMeta = parsed.meta;
+        store.set("master", state.master);
+        store.set("masterMeta", state.masterMeta);
+        toast("Loaded master sheet: " + state.master.length + " rows");
+      } else {
+        toast(f.name + ": no recognized sheet found");
+      }
+    } catch (e) { toast(f.name + ": " + e.message); }
+  }
+  refresh();
+}
+
+function setListing(names, label) {
+  state.listing = names; state.listingLabel = label;
+  store.set("listing", names); store.set("listingLabel", label);
+  refresh();
+}
+
+function namesFromCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  const split = l => l.match(/("([^"]|"")*"|[^,]*)(,|$)/g)
+    .map(c => c.replace(/,$/, "").replace(/^"|"$/g, "").replace(/""/g, '"'));
+  const header = split(lines[0]).map(x => x.trim().toLowerCase());
+  let ni = header.findIndex(x => x === "name" || x === "file name" || x === "filename");
+  const hasHeader = ni >= 0;
+  if (ni < 0) ni = 0;
+  return lines.slice(hasHeader ? 1 : 0).map(l => split(l)[ni] || "").filter(Boolean);
+}
+
+async function walkEntry(entry, out) {
+  if (entry.isFile) out.push(entry.name);
+  else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    let batch;
+    do {
+      batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      for (const e of batch) await walkEntry(e, out);
+    } while (batch.length);
+  }
+}
+
+function wireInputs() {
+  const dz = document.getElementById("dropXlsx");
+  dz.onclick = () => document.getElementById("pickXlsx").click();
+  document.getElementById("pickXlsx").onchange = e => ingestXlsx([...e.target.files]);
+  const df = document.getElementById("dropFolder");
+  df.onclick = () => document.getElementById("pickFolder").click();
+  document.getElementById("pickFolder").onchange = e => {
+    const names = [...e.target.files].map(f => f.name);
+    if (names.length) setListing(names, "picked folder, " + names.length + " files");
+  };
+  for (const el of [dz, df]) {
+    el.ondragover = e => { e.preventDefault(); el.classList.add("hover"); };
+    el.ondragleave = () => el.classList.remove("hover");
+  }
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("hover");
+    ingestXlsx([...e.dataTransfer.files]); };
+  df.ondrop = async e => {
+    e.preventDefault(); df.classList.remove("hover");
+    const names = [];
+    let usedDir = false;
+    for (const it of [...e.dataTransfer.items]) {
+      const entry = it.webkitGetAsEntry && it.webkitGetAsEntry();
+      if (entry && entry.isDirectory) { usedDir = true; await walkEntry(entry, names); }
+    }
+    if (usedDir) { setListing(names, "dropped folder, " + names.length + " files"); return; }
+    for (const f of e.dataTransfer.files) {
+      if (/\.csv$/i.test(f.name)) {
+        const n2 = namesFromCSV(await f.text());
+        setListing(n2, f.name + ", " + n2.length + " files"); return;
+      }
+      if (/\.txt$/i.test(f.name)) {
+        const n2 = (await f.text()).split(/\r?\n/).filter(l => l.trim());
+        setListing(n2, f.name + ", " + n2.length + " files"); return;
+      }
+    }
+    toast("Drop a folder, a CSV export, or a txt listing here");
+  };
+  document.getElementById("btnPaste").onclick = () => {
+    const names = document.getElementById("pasteBox").value
+      .split(/\r?\n/).filter(l => l.trim());
+    if (names.length) setListing(names, "pasted list, " + names.length + " files");
+  };
+  document.getElementById("btnClear").onclick = () => {
+    if (!confirm("Forget the loaded sheets, the clickbox listing, and every "
+      + "field result recorded here?")) return;
+    for (const k of ["links", "master", "masterMeta", "listing", "listingLabel",
+      "found", "tab", "hideDone"]) store.del(k);
+    state = { links: null, master: null, masterMeta: null, listing: null,
+      listingLabel: "", found: {}, tab: "check", filter: "", hideDone: false };
+    refresh(); toast("Cleared");
+  };
+  document.getElementById("btnDemo").onclick = loadDemo;
+}
+
+/* ---------- rendering ---------- */
+function refresh() {
+  const sx = document.getElementById("stateXlsx");
+  sx.innerHTML =
+    (state.links
+      ? `<span class="got">Links sheet: ${Object.keys(state.links).length} signals</span>`
+      : `<span class="miss">Links sheet: waiting</span>`) + "<br>" +
+    (state.master
+      ? `<span class="got">Master sheet: ${state.master.length} rows</span>`
+      : `<span class="miss">Master sheet: waiting</span>`);
+  document.getElementById("stateFolder").innerHTML = state.listing
+    ? `<span class="got">Listing loaded (${h(state.listingLabel)})</span>`
+    : `<span class="miss">Clickbox folder: not loaded, every signal counts as not in SharePoint</span>`;
+
+  const ready = state.links && state.master;
+  document.getElementById("results").style.display = ready ? "" : "none";
+  document.getElementById("placeholder").style.display = ready ? "none" : "";
+  if (!ready) { result = null; columns = null; window.__box = null; return; }
+  result = analyzeBox(state.links, state.master, state.listing || []);
+  columns = computeColumns(result, state.master, state.masterMeta, state.found);
+  window.__box = { result, columns };
+  renderSummary(); renderTabs(); renderPanel();
+}
+
+function fieldDone(e) {
+  const f = foundOf(S(e.id));
+  return !!(f && (f.biu === "no" || (f.biu === "yes" && f.saved)));
+}
+
+function renderSummary() {
+  const r = result;
+  const open = r.check.filter(e => !fieldDone(e)).length;
+  const stats = [
+    ["check", open, "need a controller check", open ? "n-bad" : "n-ok"],
+    ["have", r.have.length, "in SharePoint already", "n-ok"],
+    ["label", r.label.length, "file there, sheet not labelled", r.label.length ? "n-warn" : "n-ok"],
+    ["settled", r.settled.length, "settled by the sheet", ""],
+    ["files", r.fileFlags.noName.length + r.fileFlags.nameOff.length +
+      r.fileFlags.unmatched.length + r.fileFlags.orphan.length,
+      "file name flags", "n-warn"],
+    ["missing", r.notInMaster.length, "linked, no master row",
+      r.notInMaster.length ? "n-bad" : "n-ok"],
+  ];
+  document.getElementById("summary").innerHTML = stats.map(([id, n, txt, cls]) =>
+    `<div class="stat ${state.tab === id ? "active" : ""}" data-tab="${id}">
+       <b class="${cls}">${n}</b><span>${h(txt)}</span></div>`).join("");
+  for (const el of document.querySelectorAll(".stat"))
+    el.onclick = () => { state.tab = el.dataset.tab; store.set("tab", state.tab);
+      renderSummary(); renderTabs(); renderPanel(); };
+}
+
+const TABS = [["check", "check list"], ["have", "in sharepoint"],
+  ["columns", "sheet columns"], ["files", "file names"],
+  ["settled", "settled"], ["missing", "not in the master"]];
+
+function renderTabs() {
+  document.getElementById("tabs").innerHTML = TABS.map(([id, txt]) =>
+    `<button data-tab="${id}" class="${state.tab === id ? "on" : ""}">${h(txt)}</button>`)
+    .join("");
+  for (const el of document.querySelectorAll("#tabs button"))
+    el.onclick = () => { state.tab = el.dataset.tab; store.set("tab", state.tab);
+      renderSummary(); renderTabs(); renderPanel(); };
+}
+
+function whyChips(why) {
+  return why.map(w => `<span class="why w-${w}">${h(WHY_TEXT[w] || w)}</span>`).join("");
+}
+
+function intersection(e) {
+  const a = [e.s1, e.s2].filter(Boolean).join(" @ ");
+  const b = [e.main, e.side].filter(Boolean).join(" @ ");
+  return a || b;
+}
+
+function matchesFilter(e) {
+  const q = state.filter.trim().toLowerCase();
+  if (!q) return true;
+  return [e.id, e.county, e.s1, e.s2, e.main, e.side, e.detection, e.box_fr,
+    e.box_done].some(v => S(v).toLowerCase().includes(q));
+}
+
+function renderPanel() {
+  const p = document.getElementById("panel");
+  const r = result;
+  if (state.tab === "check") p.innerHTML = viewCheck(r);
+  else if (state.tab === "have") p.innerHTML = viewHave(r);
+  else if (state.tab === "columns") p.innerHTML = viewColumns(r);
+  else if (state.tab === "files") p.innerHTML = viewFiles(r);
+  else if (state.tab === "settled") p.innerHTML = viewSettled(r);
+  else p.innerHTML = viewMissing(r);
+  wirePanel();
+}
+
+/* --- the worklist --- */
+function viewCheck(r) {
+  let list = r.check.filter(matchesFilter);
+  if (state.hideDone) list = list.filter(e => !fieldDone(e));
+  const open = r.check.filter(e => !fieldDone(e)).length;
+  const rows = list.map(e => {
+    const f = foundOf(S(e.id)) || {};
+    const done = fieldDone(e);
+    const mt = e.url
+      ? `<a href="${h(e.url)}" target="_blank" rel="noopener">MaxTime</a>`
+      : `<span class="why w-noip">no IP</span>`;
+    const bx = e.box_url && f.biu === "yes"
+      ? `<br><a href="${h(e.box_url)}" target="_blank" rel="noopener">:57150</a>` : "";
+    return `<tr class="${done ? "settled" : ""}" data-id="${h(e.id)}">
+      <td><span class="chip">${h(e.id)}</span><br><span style="font-size:11.5px;color:#5b6b7b">row ${e.row}</span></td>
+      <td>${h(e.county)}</td>
+      <td>${h(intersection(e))}</td>
+      <td>${h(e.detection) || "<span style='color:#5b6b7b'>blank</span>"}</td>
+      <td class="mono">${h(e.box_fr) || "&mdash;"}<br>${h(e.box_done) || "&mdash;"}</td>
+      <td>${whyChips(e.why)}</td>
+      <td>${mt}${bx}</td>
+      <td>
+        <div class="res">
+          <button class="rbtn ${f.biu === "yes" ? "on-yes" : ""}" data-id="${h(e.id)}" data-biu="yes">BIU, box</button>
+          <button class="rbtn ${f.biu === "no" ? "on-no" : ""}" data-id="${h(e.id)}" data-biu="no">no BIU</button>
+          ${f.biu ? `<button class="rbtn" data-id="${h(e.id)}" data-biu="clear">clear</button>` : ""}
+        </div>
+        ${f.biu === "yes" ? `<label style="font-size:12.5px;display:block;margin-top:4px">
+          <input type="checkbox" class="savedbox" data-id="${h(e.id)}" ${f.saved ? "checked" : ""}>
+          exported and saved to SharePoint</label>` : ""}
+        ${f.biu ? `<input class="notebox notein" data-id="${h(e.id)}" placeholder="note"
+          value="${h(f.note || "")}">` : ""}
+      </td></tr>`;
+  }).join("");
+
+  return `
+  <div class="step">
+    <b>For each signal below</b>
+    <ol>
+      <li>Open MaxTime, then <code>Controller</code>, <code>Advanced IO</code>,
+        <code>Cabinet Configuration</code>, <code>IO Modules</code>.</li>
+      <li>A <code>TS2 DR1 BIU</code> in IO module 2 means there is a clickbox file.
+        Press <b>BIU, box</b>. Nothing there, press <b>no BIU</b>.</li>
+      <li>For a box, open the same IP at port <code>57150</code>, then
+        <code>Properties</code>. If Name, Location and Description are blank,
+        fill in the ID, the intersection, and KYTC District 7.</li>
+      <li><code>Export Configuration</code>, then put the file in the SharePoint
+        clickbox configuration folder and tick the box here.</li>
+    </ol>
+  </div>
+  <div class="bar">
+    <input class="filter" id="flt" placeholder="filter" value="${h(state.filter)}">
+    <label style="font-size:12.5px"><input type="checkbox" id="hd" ${state.hideDone ? "checked" : ""}>
+      hide the ones I have done</label>
+    <button class="primary" id="btnCsv">Export CSV</button>
+    <button id="btnCopyIds">Copy ID list</button>
+    <span class="note">${open} of ${r.check.length} still open${r.noip.length
+      ? `, ${r.noip.length} with no IP in the links sheet` : ""}</span>
+  </div>
+  ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
+    <th>Detection</th><th>Box / Verified</th><th>Why</th><th>Open</th>
+    <th style="width:250px">What I found</th></tr></thead>
+    <tbody>${rows}</tbody></table>`
+    : `<div class="empty">Nothing in the check list.</div>`}`;
+}
+
+/* --- already in SharePoint --- */
+function viewHave(r) {
+  const list = r.have.filter(matchesFilter);
+  const rows = list.map(e => `<tr class="${e.why.includes("label") ? "" : "settled"}">
+    <td><span class="chip">${h(e.id)}</span><br><span style="font-size:11.5px;color:#5b6b7b">row ${e.row}</span></td>
+    <td>${h(e.county)}</td>
+    <td>${h(intersection(e))}</td>
+    <td class="mono">${h(e.box_fr) || "&mdash;"} / ${h(e.box_done) || "&mdash;"}</td>
+    <td>${whyChips(e.why)}</td>
+    <td class="mono">${e.files.map(f => h(f.name) +
+      (e.bad_names.includes(f) ? ` <span class="why w-unsure">name</span>` : ""))
+      .join("<br>")}</td></tr>`).join("");
+  return `
+  <div class="bar">
+    <input class="filter" id="flt" placeholder="filter" value="${h(state.filter)}">
+    <button class="primary" id="btnCopyLabel">Copy the ${r.label.length} to label</button>
+    <span class="note">${r.have.length} signals have a clickbox file.
+      ${r.label.length} of them are not yet recorded in the sheet; the sheet
+      columns tab fills those in.</span>
+  </div>
+  ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
+    <th>Box / Verified</th><th>Standing</th><th>File in the folder</th></tr></thead>
+    <tbody>${rows}</tbody></table>`
+    : `<div class="empty">No clickbox files matched a signal.</div>`}`;
+}
+
+/* --- the three column copies --- */
+function colBlock(key, title, colNum, entries) {
+  const letter = colNum ? colLetter(colNum) : null;
+  const changed = entries.filter(x => x.out !== x.base).length;
+  const rows = entries.filter(x => !state.hideDone || x.out !== x.base)
+    .filter(x => { const q = state.filter.trim().toLowerCase();
+      return !q || [x.id, x.county, x.s1, x.s2, x.base, x.out]
+        .some(v => S(v).toLowerCase().includes(q)); })
+    .map(x => `<tr class="${x.kind === "oos" || x.kind === "dup" ? "oos" : ""}">
+      <td>${x.row}</td>
+      <td><span class="chip">${h(x.id)}</span></td>
+      <td>${h([x.s1, x.s2].filter(Boolean).join(" @ "))}</td>
+      <td class="locked"><span class="lock">&#128274;</span>${h(x.base) || "&mdash;"}</td>
+      <td>${x.out === x.base
+        ? h(x.out) || "&mdash;"
+        : (x.kind === "auto"
+          ? `<span class="auto">${h(x.out)}</span><span class="tag t-auto">auto</span>`
+          : `<span class="ov-old">${h(x.base) || "blank"}</span><span class="ov-new">${h(x.out)}</span><span class="tag t-field">field</span>`)}
+        ${x.kind === "oos" ? `<span class="tag t-oos">out of jurisdiction</span>` : ""}${x.kind === "dup" ? `<span class="tag t-oos">another row carries this ID</span>` : ""}</td>
+    </tr>`).join("");
+  return `<div class="card" style="margin-bottom:14px">
+    <h2>${h(title)}</h2>
+    <div class="bar">
+      <button class="primary btnCol" data-key="${key}">Copy the whole column</button>
+      <span class="note">${entries.length} rows, ${changed} changed.
+        ${letter ? `Paste at <b>${letter}${columns.firstRow}</b>.`
+          : "This column was not found in the sheet."}</span>
+    </div>
+    <table><thead><tr><th>Row</th><th>ID</th><th>Intersection</th>
+      <th>What the sheet says</th><th>What to paste</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+function viewColumns(r) {
+  if (!columns) return `<div class="empty">No master sheet geometry recorded.
+    Drop the master sheet again.</div>`;
+  return `
+  <div class="step">
+    <b>Three columns go back to the sheet.</b> Each copy is one line per sheet
+    row, so it pastes straight over its column. What the sheet already says is
+    locked and copied through unchanged; only a result you recorded overwrites
+    it, and autofill only ever fills a blank cell.
+  </div>
+  <div class="bar">
+    <input class="filter" id="flt" placeholder="filter" value="${h(state.filter)}">
+    <label style="font-size:12.5px"><input type="checkbox" id="hd" ${state.hideDone ? "checked" : ""}>
+      changed rows only</label>
+  </div>
+  ${colBlock("det", "Detection", columns.cols.det, columns.det)}
+  ${colBlock("boxfr", "Box or Front rack (FR)", columns.cols.boxfr, columns.boxfr)}
+  ${colBlock("boxdone", "Box Verified and saved to sharepoint", columns.cols.boxdone, columns.boxdone)}`;
+}
+
+/* --- file name flags --- */
+function fileTable(files, extra) {
+  return `<table><thead><tr><th>File</th><th>ID</th>
+    <th>${extra || "What is left of the name"}</th></tr></thead><tbody>` +
+    files.map(f => `<tr><td class="mono">${h(f.name)}</td>
+      <td>${f.ids.length ? f.ids.map(i => `<span class="chip">${h(i)}</span>`).join(" ") : "&mdash;"}</td>
+      <td>${h(f.leftover) || "<span style='color:#b3261e'>nothing</span>"}
+        ${f.row ? ` <span style="color:#5b6b7b">sheet says ${h(intersection(f.row))}</span>` : ""}</td>
+    </tr>`).join("") + `</tbody></table>`;
+}
+
+function viewFiles(r) {
+  const ff = r.fileFlags;
+  const sec = (title, exp, files) => files.length
+    ? `<h3>${h(title)} (${files.length})</h3><p class="exp">${h(exp)}</p>${fileTable(files)}`
+    : "";
+  return `<div class="anom">
+    <div class="bar"><span class="note">${r.clickbox.length} of
+      ${r.files.length} names in the folder carry a known signal ID.
+      ${r.dupIds.length} signal${r.dupIds.length === 1 ? " has" : "s have"} more
+      than one file, which is normal: each export carries its own date.</span></div>
+    ${sec("Carries an ID but does not name the intersection",
+      "Nothing is left of the name once the county code, the ID and the export "
+      + "date are removed. Retitle so the intersection is in the name.", ff.noName)}
+    ${sec("Name does not match the sheet's intersection",
+      "The name says something, but no word in it matches Street 1 or Street 2 "
+      + "for that ID. Worth opening before trusting the match.", ff.nameOff)}
+    ${sec("No recognizable signal ID",
+      "No four digit ID in the name matches a signal in the links sheet or the "
+      + "master. These files are matched to nothing.", ff.unmatched)}
+    ${sec("ID is not in the master sheet",
+      "The file names a signal the master sheet has no row for.", ff.orphan)}
+    ${sec("More than one signal ID in the name",
+      "The first known ID was used. Check which signal the file is really for.",
+      ff.multiId)}
+    ${(ff.noName.length + ff.nameOff.length + ff.unmatched.length +
+       ff.orphan.length + ff.multiId.length) === 0
+      ? `<div class="empty">No file name flags.</div>` : ""}
+  </div>`;
+}
+
+/* --- settled --- */
+function viewSettled(r) {
+  const list = r.settled.filter(matchesFilter);
+  return `<div class="bar">
+    <input class="filter" id="flt" placeholder="filter" value="${h(state.filter)}">
+    <span class="note">The sheet already records no box for these and SharePoint
+      has no file for them, so they are not in the check list. Their three
+      columns paste back exactly as the sheet has them.</span></div>
+  ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
+    <th>Detection</th><th>Box</th><th>Verified</th></tr></thead><tbody>` +
+    list.map(e => `<tr class="settled"><td><span class="chip">${h(e.id)}</span></td>
+      <td>${h(e.county)}</td><td>${h(intersection(e))}</td>
+      <td>${h(e.detection)}</td><td class="mono">${h(e.box_fr)}</td>
+      <td class="mono">${h(e.box_done)}</td></tr>`).join("") + `</tbody></table>`
+    : `<div class="empty">Nothing settled yet.</div>`}`;
+}
+
+/* --- linked signals with no master row --- */
+function viewMissing(r) {
+  if (!r.notInMaster.length)
+    return `<div class="empty">Every signal in the links sheet has a master row.</div>`;
+  return `<div class="step">
+    <b>${r.notInMaster.length} signals are in the links sheet with no row in the
+    master sheet.</b> They get no box check because there is no row to record it
+    on. Raise these with the supervisor.
+  </div>
+  <div class="bar"><button class="primary" id="btnCopyMissing">Copy the list</button></div>
+  <table><thead><tr><th>ID</th><th>County</th><th>Intersection</th><th>Controller</th></tr></thead>
+  <tbody>${r.notInMaster.map(e => `<tr><td><span class="chip">${h(e.id)}</span></td>
+    <td>${h(e.county)}</td><td>${h([e.main, e.side].filter(Boolean).join(" @ "))}</td>
+    <td>${e.url ? `<a href="${h(e.url)}" target="_blank" rel="noopener">${h(e.ip)}</a>` : "&mdash;"}</td>
+  </tr>`).join("")}</tbody></table>`;
+}
+
+/* ---------- panel wiring ---------- */
+function wirePanel() {
+  const flt = document.getElementById("flt");
+  if (flt) flt.oninput = () => { state.filter = flt.value; renderPanel();
+    const f2 = document.getElementById("flt");
+    if (f2) { f2.focus(); f2.setSelectionRange(f2.value.length, f2.value.length); } };
+  const hd = document.getElementById("hd");
+  if (hd) hd.onchange = () => { state.hideDone = hd.checked;
+    store.set("hideDone", state.hideDone); renderPanel(); };
+
+  for (const b of document.querySelectorAll(".rbtn"))
+    b.onclick = () => setFound(b.dataset.id,
+      { biu: b.dataset.biu === "clear" ? null : b.dataset.biu,
+        saved: b.dataset.biu === "clear" ? false : undefined });
+  for (const c of document.querySelectorAll(".savedbox"))
+    c.onchange = () => setFound(c.dataset.id, { saved: c.checked });
+  for (const n of document.querySelectorAll(".notein"))
+    n.onchange = () => setFound(n.dataset.id, { note: n.value });
+
+  for (const b of document.querySelectorAll(".btnCol"))
+    b.onclick = () => {
+      const entries = columns[b.dataset.key];
+      copyText(entries.map(x => x.out).join("\n") + "\n",
+        entries.length + " rows, paste at " +
+        colLetter(columns.cols[b.dataset.key]) + columns.firstRow);
+    };
+
+  const csv = document.getElementById("btnCsv");
+  if (csv) csv.onclick = () => downloadCSV("box_check.csv",
+    [["id", "row", "county", "street1", "street2", "detection", "box_column",
+      "verified_column", "why", "maxtime_url", "clickbox_url"]].concat(
+      result.check.map(e => [e.id, e.row, e.county, e.s1, e.s2, e.detection,
+        e.box_fr, e.box_done, e.why.map(w => WHY_TEXT[w] || w).join("; "),
+        e.url, e.box_url])));
+  const cid = document.getElementById("btnCopyIds");
+  if (cid) cid.onclick = () => copyText(
+    result.check.map(e => e.id).join("\n") + "\n", result.check.length + " IDs");
+  const clb = document.getElementById("btnCopyLabel");
+  if (clb) clb.onclick = () => copyText(
+    result.label.map(e => `${e.id}\trow ${e.row}\t${intersection(e)}`).join("\n") + "\n",
+    result.label.length + " rows to label");
+  const cms = document.getElementById("btnCopyMissing");
+  if (cms) cms.onclick = () => copyText(
+    result.notInMaster.map(e => `${e.id}\t${e.county}\t${[e.main, e.side]
+      .filter(Boolean).join(" @ ")}`).join("\n") + "\n",
+    result.notInMaster.length + " signals");
+}
+
+/* ---------- demo ----------
+   Synthetic: invented counties and intersections, RFC 5737 documentation
+   addresses. No real data lives in this file. */
+function loadDemo() {
+  const L = {}, M = [];
+  const rows = [
+    ["4102", "ALDER", "US 41", "MAPLE ST", "Loops", "", "", 1],
+    ["4104", "ALDER", "KY 55", "OAK AVE", "Wavetronix", "BOX", "YES", 1],
+    ["4106", "ALDER", "US 41", "PINE RD", "Loops", "N/A", "N/A", 0],
+    ["4108", "BIRCH", "KY 12", "ELM ST", "(Select)", "FD05?", "", 0],
+    ["4110", "BIRCH", "US 60", "CEDAR LN", "Loops", "", "emailed", 0],
+    ["4112", "BIRCH", "KY 12", "WALNUT DR", "Wavetronix", "BOX", "YES", 0],
+    ["4114", "CEDARTON", "US 27", "BIRCH ST", "Loops", "front rack", "", 0],
+    ["4116", "CEDARTON", "KY 33", "ASH BLVD", "Loops", "", "", 1],
+    ["4118", "CEDARTON", "US 27", "SPRUCE WAY", "Loops&Radar", "?", "", 0],
+  ];
+  let r = 2;
+  for (const [id, county, s1, s2, det, fr, done] of rows) {
+    L[id] = { row: r, county, main: s1, side: s2,
+      ip: "198.51.100." + (10 + M.length), port: "8080",
+      url: `http://198.51.100.${10 + M.length}:8080/maxtime/`,
+      box_url: `http://198.51.100.${10 + M.length}:57150/` };
+    M.push({ row: r, id, county, county_id: "0" + (10 + M.length), s1, s2,
+      status: "YES", detection: det, box_fr: fr, box_done: done });
+    r++;
+  }
+  /* a signal in the links sheet with no master row */
+  L["4120"] = { row: r, county: "CEDARTON", main: "KY 33", side: "HICKORY CT",
+    ip: "198.51.100.99", port: "8080",
+    url: "http://198.51.100.99:8080/maxtime/", box_url: "http://198.51.100.99:57150/" };
+  state.links = L;
+  state.master = M;
+  state.masterMeta = { firstRow: 2, lastRow: M[M.length - 1].row,
+    cols: { id: 3, county: 1, s1: 6, s2: 7, det: 24, boxfr: 26, boxdone: 27 } };
+  setListing([
+    "016_4102_US41@MAPLE_20260812_1431.cbx",
+    "016_4104_KY55@OAK_20260714_0902.cbx",
+    "016_4104_KY55@OAK_20260901_1122.cbx",
+    "018_4116_20260805_0930.cbx",
+    "018_4118_MAIN@SECOND_20260806.cbx",
+    "clickbox_export_20260901.cbx",
+    "desktop.ini",
+  ], "demo listing, 7 files");
+  for (const k of ["links", "master", "masterMeta"]) store.set(k, state[k]);
+  toast("Loaded synthetic demo data");
+}
+
+wireInputs();
+refresh();
+</script>
+</body>
+</html>

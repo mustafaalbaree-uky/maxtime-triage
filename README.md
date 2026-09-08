@@ -61,6 +61,25 @@ The **Load demo data** button fills the page with a small synthetic dataset
 (fake counties, RFC 5737 documentation IP addresses) so the tool can be
 demonstrated without any real data. Both screenshots above show that demo set.
 
+**`webapp/box.html`** is the second job, on its own page: the clickbox
+configuration column. It takes the same two sheets plus a listing of the
+SharePoint clickbox configuration folder and works out which signals still
+need the controller opened, which already have a file and only need the sheet
+labelled, and what to paste back into the Detection, Box or Front rack, and
+Box Verified columns. SharePoint is the source of truth: a row claiming the
+box was saved with no file behind it is work, not a finish. Exports carry the
+date and time they were made, so one signal appears under several names and
+matching is by the four digit ID alone; a separate tab flags exports whose
+name carries the ID but not the intersection.
+
+**`downloader/probe_iomodules.py`** tests, against one controller, whether the
+cabinet IO module configuration can be read over the same open API the
+downloader uses. The manual check is `Controller`, `Advanced IO`,
+`Cabinet Configuration`, `IO Modules`, looking for a `TS2 DR1 BIU` in module
+2; if that answer can be read directly, hundreds of controller visits collapse
+into one script run. It discovers MIB names from the controller's own web UI
+rather than guessing, and issues GET requests only.
+
 **`downloader/fetch_missing.py`** automates the per controller download
 itself: it reads the dashboard's CSV export and, for each signal, asks the
 controller for its active database name and streams that database to disk,
@@ -79,8 +98,9 @@ controller that replays them.
 3. Download the missing databases (the CSV export feeds
    `downloader/fetch_missing.py`), confirm each is the intended one, and place
    it in SharePoint.
-4. Work the box check list: open each controller at port 57150, confirm the
-   box, and update the master column.
+4. Work the box column in `webapp/box.html`: check IO module 2 for a
+   TS2 DR1 BIU, fetch the clickbox configuration at port 57150, and paste the
+   three columns back.
 5. Resolve the anomalies by hand: retitle nonstandard files, reconcile
    duplicate master rows, and fill in missing IDs.
 6. Rename the master sheet's box column from "Box Verified" to
@@ -106,6 +126,11 @@ sensitive, so the design guarantees it never leaves the machine:
 
 ## Parity testing
 
+The box page keeps its own rules in one marked block with no DOM in it, and
+`tools/verify_box.py` pulls that block out of the HTML and runs it under node
+against the sheets plus a mock clickbox folder built to trip every file rule,
+so the counts can be checked without opening a browser.
+
 The cross referencing rules exist twice: a Python reference implementation
 (`tools/triage_lib.py`) and the JavaScript port inside the dashboard.
 `tools/verify.py` runs the reference against the real sheets plus a mock
@@ -116,19 +141,22 @@ demo mode, and the zero network guarantee.
 
 ## Deploying to a work computer
 
-Email or copy `webapp/index.html` to the machine and open it in Edge. That is
-the entire install. The footer shows a build stamp so it is always clear
+Email or copy `webapp/index.html` and `webapp/box.html` to the machine and open
+them in Edge. That is the entire install. The footer shows a build stamp so it is always clear
 which version is in use. The downloader needs only a standard Python 3
 install: `python3 fetch_missing.py needs_download.csv`.
 
 ## Repository layout
 
-    webapp/index.html          the triage dashboard, fully self contained
+    webapp/index.html          the timing triage dashboard, self contained
+    webapp/box.html            the clickbox configuration page, self contained
     downloader/fetch_missing.py  controller downloader
+    downloader/probe_iomodules.py  read only IO module probe, one controller
     downloader/test_downloader.py  offline test against a mock controller
     downloader/PROTOCOL.md     the two controller endpoints it uses
     tools/triage_lib.py        reference parsing and cross referencing logic
     tools/verify.py            builds mock listing and expected results
+    tools/verify_box.py        runs box.html's own rules under node
     docs/                      screenshots (synthetic demo data only)
     data/                      local working files, ignored by git
 

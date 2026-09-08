@@ -101,7 +101,10 @@ Open the **anomalies** tab and handle each group:
   highlighted. Pick **Keep this row** or flag for the supervisor and add a
   note; nothing is deleted, the picks are a worklist for editing the sheet.
 
-## Step 5: box check (on hold until port access)
+## Step 5: box check
+
+This is now its own page. See "The box column" at the end of this file; the
+box check tab in `index.html` is the older, thinner version of the same list.
 
 Open the **box check** tab. These signals are not yet confirmed in the box
 column and are not front rack. Confirming a box means opening the controller at
@@ -117,3 +120,105 @@ wavetronix means there is a box to configure), and update the master column.
 
 Once the rest is done, rename the master sheet's box column from "Box Verified"
 to "Box Configuration Downloaded". The tool reads either name.
+
+---
+
+# The box column: `webapp/box.html`
+
+A separate page for the second job. Same two sheets, a different folder, and
+three columns instead of one. Open `webapp/box.html` the same way you open
+`index.html`: double click it, drop the sheets on it.
+
+## What decides the work
+
+Confirmed by the supervisor on 8 September 2026:
+
+* SharePoint is the source of truth. If the clickbox configuration folder
+  already holds a file for a signal ID, that signal is finished and only the
+  sheet needs labelling. Files carry the export's own date and time, so the
+  same signal legitimately appears more than once and names cannot be
+  compared; matching is by the four digit ID found anywhere in the name.
+* Where there is no file, the answer comes from the controller:
+  `Controller`, `Advanced IO`, `Cabinet Configuration`, `IO Modules`. A
+  `TS2 DR1 BIU` in IO module 2 means the signal has a clickbox.
+* A box means the detection column is Wavetronix even where the sheet still
+  says Loops, and the box column becomes `BOX`. No BIU means `N/A`.
+* To fetch the file, open the same IP at port `57150`, then `Properties`. If
+  Name, Location and Description are blank they have to be filled in first:
+  the ID, the intersection, and KYTC District 7. Then
+  `Export Configuration`.
+
+## Step 1: load the inputs
+
+Drop the links sheet and the master sheet on the first card, then point the
+second card at the synced SharePoint clickbox configuration folder (folder
+picker, a CSV export, a txt listing, or pasted names). Without the folder
+every signal counts as not yet in SharePoint, so the check list is at its
+longest.
+
+## Step 2: work the check list
+
+Every signal that still needs the controller opened, each tagged with why it
+is there:
+
+* **never checked**: both box columns blank.
+* **sheet is unsure**: the box column carries a question mark (`FD05?`,
+  `170?`, `none?`).
+* **waiting on someone**: the column says emailed, no comm, needs a field
+  check, not yet.
+* **sheet says saved, no file**: the sheet records the box as downloaded and
+  the clickbox folder has nothing for that ID.
+* **box, config not downloaded**: the sheet says there is a box and the file
+  was never fetched.
+* **box column says something else**: text that is not a recognized answer.
+
+Press **BIU, box** or **no BIU** for each. A box reveals the `:57150` link and
+a tick box for once the export is in SharePoint. What you press is saved in
+the browser and survives closing the page.
+
+Rows the sheet already settles cleanly (front rack, `n/a`, with no question
+mark and nobody waiting) are not in the list; they are on the **settled** tab.
+
+## Step 3: paste the three columns back
+
+The **sheet columns** tab holds one copy button per column: Detection,
+Box or Front rack (FR), and Box Verified. Each copy is one line per sheet row
+so it pastes straight over its column, and the tab names the exact cell to
+paste at. What the sheet already says is locked and copied through unchanged.
+Only a result recorded in step 2 overwrites a cell, and autofill only ever
+fills a blank one.
+
+## Step 4: file names and the missing rows
+
+The **file names** tab flags exports whose name carries an ID but does not
+name the intersection, names that match no signal, and names whose words do
+not match the sheet's own streets for that ID. Retitle those in SharePoint.
+
+The **not in the master** tab lists signals that exist in the links sheet with
+no row in the master sheet. They get no box check because there is no row to
+record it on. These should have been added during the timing pass; raise them
+with the supervisor.
+
+## Automating the BIU check
+
+The check repeats once per signal, which is why it is worth testing whether
+the controller will answer it directly. On the work computer, against a single
+controller you know responds:
+
+    python3 downloader/probe_iomodules.py <controller-ip>
+
+It is read only: GET requests, no credentials, nothing written. It reads the
+endpoint the downloader already uses to prove the open API works, then pulls
+every MIB name out of the controller's own web UI and reads the ones that
+mention cabinet, IO module, BIU, rack or TS2, reporting which response
+carries `BIU`. If none do, run it again with `--all-mibs`, and failing that
+open the IO Modules page with DevTools on the Network tab and send the request
+URL that page fires.
+
+## Checking the rules without a browser
+
+    python3 tools/verify_box.py
+
+Pulls the page's own logic out of `webapp/box.html`, runs it under node
+against the real sheets plus a mock clickbox folder built to trip every file
+rule, and prints the counts. `--empty-folder` runs it with no folder listing.
