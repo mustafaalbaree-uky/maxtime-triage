@@ -222,3 +222,10 @@ URL that page fires.
 Pulls the page's own logic out of `webapp/box.html`, runs it under node
 against the real sheets plus a mock clickbox folder built to trip every file
 rule, and prints the counts. `--empty-folder` runs it with no folder listing.
+
+### Browser checker with reviewed import
+
+For the calibrated browser automation workflow, use
+[`downloader/BIU_CHECK.md`](downloader/BIU_CHECK.md). Export the automation
+worklist from the updated box page, calibrate once, test one controller, then
+review/import `results.json`. BIU configuration downloads remain manual.

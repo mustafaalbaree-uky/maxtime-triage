@@ -14,3 +14,6 @@ __pycache__/
 # The synthetic demo set is the one exception.
 !demo/*.xlsx
 !demo/*.csv
+# Local BIU checker calibration and controller evidence.
+biu-profile.json
+biu-results/

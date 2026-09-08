@@ -167,7 +167,7 @@
 
 <script>
 "use strict";
-const BUILD = "v0.1.0, built 2026-09-08";
+const BUILD = "v0.2.0, built 2026-09-08";
 document.getElementById("stamp").textContent =
   "MaxTime Box Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -627,6 +627,31 @@ function computeColumns(result, master, meta, found) {
   return out;
 }
 
+/* Automation proposals are reviewed before they become field decisions. */
+function automationProposals(payload, check, found) {
+  if (!payload || payload.schema !== "maxtime-biu-v1" || !Array.isArray(payload.results))
+    throw new Error("Not a BIU checker results file");
+  const counts = new Map();
+  for (const r of payload.results) {
+    if (!r || typeof r !== "object") throw new Error("Malformed result");
+    counts.set(S(r.id), (counts.get(S(r.id)) || 0) + 1);
+  }
+  return payload.results.map(r => {
+    const id = S(r.id), e = check.find(e => S(e.id) === id), f = found[id] || {};
+    let skip = "";
+    if (counts.get(id) !== 1) skip = "Duplicate ID in results";
+    else if (!e) skip = "Not in the current check list";
+    else if (S(e.url) !== S(r.maxtime_url)) skip = "Controller URL differs from this worklist";
+    else if (f.biu || f.saved) skip = "Already has a manual or imported answer";
+    else if (!["yes", "no"].includes(r.biu)) skip = "Needs manual review";
+    else if (!Array.isArray(r.evidence) || r.evidence.length < 2 ||
+      !r.evidence.every(row => Array.isArray(row) && row.every(c => typeof c === "string")))
+      skip = "No readable module evidence";
+    return { id, biu: r.biu, reason: S(r.reason), checked_at: S(r.checked_at),
+      evidence: Array.isArray(r.evidence) ? r.evidence : [], skip };
+  });
+}
+
 /* ================= LOGIC-END ================= */
 
 /* ---------- storage and state ---------- */
@@ -649,6 +674,7 @@ let state = {
   hideDone: store.get("hideDone", false),
 };
 let result = null, columns = null;
+let pendingAutomation = null;
 
 function saveFound() { store.set("found", state.found); }
 function foundOf(id) { return state.found[id] || null; }
@@ -942,14 +968,36 @@ function viewCheck(r) {
       hide the ones I have done</label>
     <button class="primary" id="btnCsv">Export CSV</button>
     <button id="btnCopyIds">Copy ID list</button>
+    <button id="btnAutoCsv">Export automation worklist</button>
+    <label class="rbtn">Review script results <input id="autoResults" type="file" accept=".json" hidden></label>
     <span class="note">${open} of ${r.check.length} still open${r.noip.length
       ? `, ${r.noip.length} with no IP in the links sheet` : ""}</span>
   </div>
+  ${automationPreview()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
     <th>Detection</th><th>Box / Verified</th><th>Why</th><th>Open</th>
     <th style="width:250px">What I found</th></tr></thead>
     <tbody>${rows}</tbody></table>`
     : `<div class="empty">Nothing in the check list.</div>`}`;
+}
+
+function automationPreview() {
+  if (!pendingAutomation) return "";
+  const proposals = automationProposals(pendingAutomation, result.check, state.found);
+  const ready = proposals.filter(p => !p.skip).length;
+  return `<div class="step"><b>Review automated IO module checks</b>
+    <p>${ready} answers can be applied. Existing answers are preserved. Unknown results stay open.
+    Compare the module evidence and the script's local screenshots with your manual checks.</p>
+    <table><thead><tr><th>ID</th><th>Proposed answer</th><th>Evidence / reason</th><th>Import</th></tr></thead>
+    <tbody>${proposals.map(p => `<tr><td>${h(p.id)}</td>
+      <td>${h(p.biu === "yes" ? "BIU, box" : p.biu === "no" ? "no BIU" : "needs review")}</td>
+      <td>${h(p.reason)}<br><small>${h(p.checked_at)}</small>
+      <details><summary>Module table</summary><pre>${h(p.evidence.map(row => Array.isArray(row) ? row.join(" | ") : "").join("\n"))}</pre></details></td>
+      <td>${h(p.skip || "Ready")}</td></tr>`).join("")}</tbody></table>
+    <button id="applyAutomation" class="primary" ${ready ? "" : "disabled"}>I reviewed these — apply ${ready} answers</button>
+    <button id="cancelAutomation">Dismiss</button>
+    <p>BIU answers reveal the :57150 link. Download the box configuration and mark it saved yourself.</p>
+  </div>`;
 }
 
 /* --- already in SharePoint --- */
@@ -972,6 +1020,7 @@ function viewHave(r) {
       ${r.label.length} of them are not yet recorded in the sheet; the sheet
       columns tab fills those in.</span>
   </div>
+  ${automationPreview()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
     <th>Box / Verified</th><th>Standing</th><th>File in the folder</th></tr></thead>
     <tbody>${rows}</tbody></table>`
@@ -1080,6 +1129,7 @@ function viewSettled(r) {
     <span class="note">The sheet already records no box for these and SharePoint
       has no file for them, so they are not in the check list. Their three
       columns paste back exactly as the sheet has them.</span></div>
+  ${automationPreview()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
     <th>Detection</th><th>Box</th><th>Verified</th></tr></thead><tbody>` +
     list.map(e => `<tr class="settled"><td><span class="chip">${h(e.id)}</span></td>
@@ -1140,6 +1190,35 @@ function wirePanel() {
       result.check.map(e => [e.id, e.row, e.county, e.s1, e.s2, e.detection,
         e.box_fr, e.box_done, e.why.map(w => WHY_TEXT[w] || w).join("; "),
         e.url, e.box_url])));
+  const autoCsv = document.getElementById("btnAutoCsv");
+  if (autoCsv) autoCsv.onclick = () => downloadCSV("biu_worklist.csv",
+    [["id", "maxtime_url", "intersection"]].concat(result.check
+      .filter(e => e.url && !(foundOf(S(e.id)) || {}).biu && !(foundOf(S(e.id)) || {}).saved)
+      .map(e => [e.id, e.url, intersection(e)])));
+  const autoInput = document.getElementById("autoResults");
+  if (autoInput) autoInput.onchange = async () => {
+    try {
+      const file = autoInput.files[0];
+      if (!file) return;
+      const payload = JSON.parse(await file.text());
+      automationProposals(payload, result.check, state.found);
+      pendingAutomation = payload;
+      renderPanel();
+    } catch (e) { toast("Could not import: " + e.message); }
+  };
+  const apply = document.getElementById("applyAutomation");
+  if (apply) apply.onclick = () => {
+    const proposals = automationProposals(pendingAutomation, result.check, state.found);
+    for (const p of proposals.filter(p => !p.skip)) {
+      const cur = state.found[p.id] || {};
+      state.found[p.id] = { ...cur, biu: p.biu, saved: false,
+        note: [cur.note, "Reviewed script check " + p.checked_at + ": " + p.reason].filter(Boolean).join("; ") };
+    }
+    pendingAutomation = null;
+    saveFound(); refresh(); toast("Reviewed answers applied; box downloads remain manual");
+  };
+  const cancel = document.getElementById("cancelAutomation");
+  if (cancel) cancel.onclick = () => { pendingAutomation = null; renderPanel(); };
   const cid = document.getElementById("btnCopyIds");
   if (cid) cid.onclick = () => copyText(
     result.check.map(e => e.id).join("\n") + "\n", result.check.length + " IDs");

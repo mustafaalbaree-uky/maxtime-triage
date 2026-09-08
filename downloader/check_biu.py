@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""Read IO Modules using a visible browser. See BIU_CHECK.md. No controller saves."""
+import argparse
+import csv
+from datetime import datetime, timezone
+from getpass import getpass
+import json
+from pathlib import Path
+import re
+import time
+from urllib.parse import urlsplit
+
+SCHEMA = 'maxtime-biu-v1'
+TABLES_JS = r"""() => {
+ const visible = e => !!(e.getClientRects().length);
+ const text = e => {
+   const s = e.querySelector('select');
+   if (s) return Array.from(s.selectedOptions).map(o => o.textContent.trim()).join(' ');
+   const i = e.querySelector('input:not([type=password]):not([type=hidden])');
+   return i ? i.value.trim() : e.innerText.trim();
+ };
+ return Array.from(document.querySelectorAll('table,[role=grid]')).map((t,index) => ({
+   index, visible: visible(t),
+   rows: Array.from(t.querySelectorAll('tr,[role=row]')).filter(visible).map(r =>
+     Array.from(r.querySelectorAll('th,td,[role=columnheader],[role=gridcell]')).map(text)
+   ).filter(r => r.length)
+ })).filter(t => t.visible && t.rows.length > 1);
+}"""
+
+
+def norm(value):
+    return re.sub(r'\s+', ' ', str(value)).strip().casefold()
+
+
+def origin(url):
+    p = urlsplit(url)
+    if p.scheme not in ('http', 'https') or not p.hostname or p.username or p.password:
+        raise ValueError('Expected an HTTP(S) controller URL without credentials')
+    if p.port == 57150:
+        raise ValueError('Use the MaxTime URL, not the clickbox URL')
+    return (p.scheme.lower(), p.hostname.lower(), p.port or (443 if p.scheme == 'https' else 80))
+
+
+def read_worklist(path):
+    with open(path, encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f)
+        if not {'id', 'maxtime_url'}.issubset(reader.fieldnames or []):
+            raise ValueError('Export the automation worklist from the updated box.html')
+        rows = list(reader)
+    seen = set()
+    for r in rows:
+        r['id'] = r['id'].strip()
+        r['maxtime_url'] = r['maxtime_url'].strip()
+        if not re.fullmatch(r'[4-9]\d{3}', r['id']) or r['id'] in seen:
+            raise ValueError('Worklist contains an invalid or duplicate ID')
+        seen.add(r['id'])
+        origin(r['maxtime_url'])
+    return rows
+
+
+def classify(rows, profile):
+    """Never infer absence from a missing page/table, blank type or malformed row."""
+    if not rows or rows[0] != profile['headers']:
+        return 'unknown', 'Table headers changed; recalibrate'
+    modules = {}
+    for row in rows[1:]:
+        if len(row) != len(profile['headers']):
+            return 'unknown', 'Incomplete or unexpected table row'
+        raw = norm(row[profile['module_column']])
+        match = re.fullmatch(r'(?:(?:io\s*)?module\s*)?#?\s*(\d+)', raw)
+        kind = norm(row[profile['type_column']])
+        if not match or not kind or kind in ('loading', 'loading...', '(select)', 'select', 'unknown', 'error', '-'):
+            return 'unknown', 'Module number or selected type was unreadable'
+        number = int(match[1])
+        if number in modules or number < 1:
+            return 'unknown', 'Duplicate or invalid module number'
+        modules[number] = kind
+    if not modules or sorted(modules) != list(range(1, len(modules) + 1)):
+        return 'unknown', 'Module list is empty or has gaps'
+    target = modules.get(2)
+    if target == 'ts2 dr1 biu':
+        return 'yes', 'Module 2: TS2 DR1 BIU'
+    if any('biu' in t for n, t in modules.items()):
+        return 'unknown', 'BIU type or position differs from the agreed module 2 rule'
+    if any(t not in profile.get('observed_non_biu_types', []) for t in modules.values()):
+        return 'unknown', 'Unrecognized module type; verify manually and recalibrate'
+    if not profile.get('complete_table_confirmed'):
+        return 'unknown', 'Table completeness has not been confirmed'
+    return 'no', ('Only module 1 is configured' if target is None else 'Module 2: ' + target)
+
+
+def click_text(page, pattern, timeout=8000):
+    # Exact names, unique visible match. Never use coordinates or arbitrary first match.
+    rx = re.compile(pattern, re.I)
+    until = time.monotonic() + timeout / 1000
+    while time.monotonic() < until:
+        for role in ('button', 'link', 'menuitem', 'tab'):
+            loc = page.get_by_role(role, name=rx).filter(visible=True)
+            if loc.count() == 1:
+                loc.click()
+                return
+        loc = page.get_by_text(rx).filter(visible=True)
+        if loc.count() == 1:
+            loc.click()
+            return
+        # Native dropdown menus use selected option text, not a click on <option>.
+        choices = []
+        for select in page.locator('select:visible').all():
+            for opt in select.locator('option').all():
+                if rx.fullmatch(opt.inner_text().strip()):
+                    choices.append((select, opt.get_attribute('value'), opt.inner_text()))
+        if len(choices) == 1:
+            select, value, label = choices[0]
+            select.select_option(value=value) if value is not None else select.select_option(label=label)
+            return
+        page.wait_for_timeout(200)
+    raise RuntimeError('Could not uniquely locate navigation: ' + pattern)
+
+
+def navigate(page, url, username, password):
+    page.goto(url, wait_until='domcontentloaded')
+    try:
+        click_text(page, r'^Sign\s*in(?:\s*to)?$', 3000)
+    except RuntimeError:
+        pass  # Some firmware opens the login form directly, or has an open session.
+    if not page.locator('input[type=password]:visible').count():
+        try:
+            click_text(page, r'^Profile\s*server$', 3000)
+        except RuntimeError:
+            pass
+    else:
+        # Profile server can be a native select beside the login fields.
+        try:
+            click_text(page, r'^Profile\s*server$', 1000)
+        except RuntimeError:
+            pass
+    pw = page.locator('input[type=password]:visible')
+    if pw.count():
+        user = page.locator('input:visible:not([type=password]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio])')
+        if pw.count() != 1 or user.count() != 1:
+            raise RuntimeError('Login fields are ambiguous; use --setup to inspect this firmware')
+        if origin(page.url) != origin(url):
+            raise RuntimeError('Login redirected to a different origin; credentials were not entered')
+        user.fill(username)
+        pw.fill(password)
+        click_text(page, r'^(?:Sign\s*in|Log\s*in|Login)$')
+        pw.wait_for(state='hidden', timeout=15000)
+    for label in ('Controller', 'Advanced IO', 'Cabinet Configuration', 'IO Modules'):
+        click_text(page, '^' + re.escape(label) + '$')
+
+
+def stable_tables(page):
+    previous = None
+    stable_since = time.monotonic()
+    until = time.monotonic() + 15
+    while time.monotonic() < until:
+        tables = page.evaluate(TABLES_JS)
+        if tables != previous:
+            stable_since = time.monotonic()
+            previous = tables
+        if tables and time.monotonic() - stable_since >= 2:
+            return tables
+        page.wait_for_timeout(250)
+    raise RuntimeError('No stable, readable IO module table')
+
+
+def setup(page, row, path):
+    page.goto(row['maxtime_url'], wait_until='domcontentloaded')
+    print('\nIn the opened browser, sign in and open Controller > Advanced IO >')
+    print('Cabinet Configuration > IO Modules. Do not change configuration.')
+    input('When the complete module list is visible, press Enter here: ')
+    tables = stable_tables(page)
+    for i, table in enumerate(tables):
+        print('\nTable', i + 1)
+        for cells in table['rows']:
+            print(' | '.join(cells))
+    choice = int(input('\nWhich table is the IO module list? Number: ')) - 1
+    if not 0 <= choice < len(tables):
+        raise ValueError('Invalid table number')
+    table = tables[choice]
+    headers = table['rows'][0]
+    for i, header in enumerate(headers):
+        print(i + 1, header)
+    module_col = int(input('Module NUMBER column number: ')) - 1
+    type_col = int(input('Module TYPE column number: ')) - 1
+    if not (0 <= module_col < len(headers) and 0 <= type_col < len(headers)) or module_col == type_col:
+        raise ValueError('Invalid columns')
+    print('Confirm this table includes ALL configured modules, with no pagination,')
+    print('collapsed rows, filters, or virtual scrolling hiding other modules.')
+    if input('Type COMPLETE to confirm, otherwise press Enter to cancel: ') != 'COMPLETE':
+        raise ValueError('Setup cancelled; no profile saved')
+    profile = dict(headers=headers, module_column=module_col, type_column=type_col,
+                   complete_table_confirmed=True, schema=SCHEMA,
+                   observed_non_biu_types=sorted({norm(r[type_col]) for r in table['rows'][1:]
+                                                 if len(r) == len(headers) and 'biu' not in norm(r[type_col])}))
+    answer, reason = classify(table['rows'], profile)
+    print('Proposed result:', answer, '-', reason)
+    if answer == 'unknown':
+        raise ValueError('This layout needs an adapter. Keep the displayed table details for follow-up.')
+    if input('Does that match your manual check? Type AGREE to save: ') != 'AGREE':
+        raise ValueError('Setup cancelled; no profile saved')
+    path.write_text(json.dumps(profile, indent=2), encoding='utf-8')
+    print('Profile saved. Next, run without --setup to test automatic login/navigation.')
+
+
+def inspect_modules(page, profile):
+    if page.locator('input[type=password]:visible').count():
+        raise RuntimeError('Still on login page')
+    if not page.get_by_text(re.compile(r'^IO Modules$', re.I)).filter(visible=True).count():
+        raise RuntimeError('IO Modules page marker missing')
+    tables = stable_tables(page)
+    matches = [t for t in tables if t['rows'][0] == profile['headers']]
+    if len(matches) != 1:
+        raise RuntimeError('Module table is missing or ambiguous')
+    # Any visible pagination control makes an absence result unsafe.
+    if page.get_by_role('button', name=re.compile(r'^(?:next|next page|load more)$', re.I)).filter(visible=True).count():
+        raise RuntimeError('Pagination present; table may be incomplete')
+    return matches[0]['rows']
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('csv', type=Path)
+    ap.add_argument('--setup', action='store_true', help='Calibrate the full module table once, manually')
+    ap.add_argument('--profile', type=Path, default=Path('biu-profile.json'))
+    ap.add_argument('--out', type=Path, default=Path('biu-results'))
+    ap.add_argument('--only', help='One signal ID')
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument('--limit', type=int, default=1, help='Controllers to check (default: 1)')
+    group.add_argument('--all', action='store_true', help='Process the whole exported worklist')
+    ap.add_argument('--browser', choices=['msedge', 'chrome', 'chromium'], default='msedge')
+    ap.add_argument('--delay', type=float, default=3, help='Seconds between controllers')
+    args = ap.parse_args()
+    if args.limit < 1 or args.delay < 0:
+        ap.error('limit must be positive and delay nonnegative')
+    rows = read_worklist(args.csv)
+    if args.only:
+        rows = [r for r in rows if r['id'] == args.only]
+    if not args.all:
+        rows = rows[:args.limit]
+    if not rows:
+        ap.error('No matching controller in the exported worklist')
+    from playwright.sync_api import sync_playwright
+    profile = None
+    if not args.setup:
+        profile = json.loads(args.profile.read_text(encoding='utf-8'))
+        if profile.get('schema') != SCHEMA:
+            raise ValueError('Unsupported profile; run --setup')
+    username = input('Username (kept in memory): ') if not args.setup else ''
+    password = getpass('Password (hidden, never saved): ') if not args.setup else ''
+    args.out.mkdir(parents=True, exist_ok=True)
+    run = args.out / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+    run.mkdir()
+    results = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, **({} if args.browser == 'chromium' else {'channel': args.browser}))
+        try:
+            for i, row in enumerate(rows):
+                context = browser.new_context(accept_downloads=False)
+                page = context.new_page()
+                page.set_default_timeout(15000)
+                if args.setup:
+                    setup(page, row, args.profile)
+                    return 0
+                record = dict(id=row['id'], maxtime_url=row['maxtime_url'], biu='unknown',
+                              checked_at=datetime.now(timezone.utc).isoformat(), evidence=[], reason='')
+                login_failed = False
+                try:
+                    navigate(page, row['maxtime_url'], username, password)
+                    if origin(page.url) != origin(row['maxtime_url']):
+                        raise RuntimeError('Controller redirected to a different origin')
+                    evidence = inspect_modules(page, profile)
+                    record['evidence'] = evidence
+                    record['biu'], record['reason'] = classify(evidence, profile)
+                    # Capture only after successful navigation; never screenshot a login form.
+                    page.screenshot(path=str(run / (row['id'] + '.png')), full_page=True)
+                except Exception as exc:
+                    # No exception bodies, DOM dumps, cookies, URLs with tokens, or credentials in logs.
+                    try:
+                        login_failed = not page.is_closed() and bool(page.locator('input[type=password]:visible').count())
+                    except Exception:
+                        login_failed = True  # A lost browser session should also stop the batch.
+                    record['biu'] = 'unknown'
+                    record['reason'] = str(exc) if type(exc) is RuntimeError else type(exc).__name__ + ': login, navigation or read failed'
+                finally:
+                    context.close()
+                results.append(record)
+                payload = dict(schema=SCHEMA, results=results)
+                temp = run / 'results.tmp'
+                temp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+                temp.replace(run / 'results.json')
+                print(f"{i+1}/{len(rows)} {row['id']}: {record['biu']} — {record['reason']}")
+                if login_failed:
+                    print('Login did not complete. Stopping the batch; verify login before trying again.')
+                    break
+                if i + 1 < len(rows):
+                    time.sleep(args.delay)
+        finally:
+            browser.close()
+    print('Import into box.html:', run / 'results.json')
+    print('Review the evidence and screenshots before applying results. Box downloads stay manual.')
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print('\nStopped. Results already written remain available.')
+        raise SystemExit(130)
+    except (ValueError, FileNotFoundError, ImportError) as exc:
+        print(str(exc))
+        print('See BIU_CHECK.md for setup and installation.')
+        raise SystemExit(2)

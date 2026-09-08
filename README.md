@@ -163,3 +163,15 @@ install: `python3 fetch_missing.py needs_download.csv`.
 No real data can enter this repository: the demo dataset is synthetic and the
 `.gitignore` blocks everything else. The screenshots, the demo button, and the
 tests are the only data it will ever contain.
+
+## Automating the repetitive BIU visits
+
+[`downloader/check_biu.py`](downloader/check_biu.py) uses Python + Playwright
+with a visible Edge window to sign in and read the IO module table. Calibrate
+the table once on the work computer, then test one controller (the default)
+before a batch. The updated box page exports unresolved work and previews
+results before applying them; unknown checks and existing answers are preserved.
+Box configuration downloads remain manual. See the
+[work computer instructions](downloader/BIU_CHECK.md) for installation,
+calibration, validation and import. Real-controller navigation still needs the
+first work-network test; offline tests cover synthetic controller screens.
