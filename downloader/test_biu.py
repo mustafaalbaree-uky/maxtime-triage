@@ -67,6 +67,15 @@ assert.ok(run([{...row,maxtime_url:check[1].url}])[0].skip);
 assert.ok(run([{...row,evidence:[]}])[0].skip);
 assert.ok(run([row,row]).every(r => r.skip));
 assert.throws(() => automationProposals({},check,{}));
+const links = {'4821': {row:2,main:'MAIN',side:'OAK',ip:'192.0.2.1',url:'http://192.0.2.1'}};
+const master = [{id:'4821',row:2,county:'ALDER',s1:'MAIN',s2:'OAK'}];
+const audit = analyzeBox(links,master,['4821_MAIN_OAK.cbx','4822_OTHER.cbx','4822_OTHER_copy.cbx','export_20260908.cbx','4823_sheet.xlsx']);
+assert.deepEqual(audit.folderOnly.map(e=>e.id),['4822']);
+assert.equal(audit.folderOnly[0].files.length,2);
+assert.equal(audit.have.length,1);
+assert.equal(audit.check.length,0);
+assert.equal(audit.byId['4822'],undefined); // Candidate files cannot create automatic sheet answers.
+
 '''
         subprocess.run(['node', '-e', js], check=True, capture_output=True)
 

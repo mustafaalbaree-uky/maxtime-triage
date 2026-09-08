@@ -167,7 +167,7 @@
 
 <script>
 "use strict";
-const BUILD = "v0.2.0, built 2026-09-08";
+const BUILD = "v0.2.1, built 2026-09-08";
 document.getElementById("stamp").textContent =
   "MaxTime Box Triage " + BUILD + ". Local only: no network calls, no telemetry.";
 
@@ -420,13 +420,15 @@ function extOf(name) {
 function classifyClickboxFile(name, validIds) {
   const base = S(name).replace(/\\/g, "/").split("/").pop();
   const out = { name: base, id: null, ids: [], county_prefix: null,
-    kind: "ignore", leftover: "", words: [] };
+    kind: "ignore", leftover: "", words: [], candidateIds: [] };
   if (!base || base.startsWith(".") || base.toLowerCase() === "desktop.ini")
     return out;
   const ext = extOf(base);
   if (IGNORE_EXTS.has(ext)) return out;
 
   const all = base.match(ID_TOKEN_RE) || [];
+  // Unverified IDs remain candidates: a filename number can also be a route.
+  out.candidateIds = [...new Set(all.filter(t => /^[4-9]\d{3}$/.test(t)))];
   out.ids = [...new Set(all.filter(t => validIds.has(t)))];
   out.id = out.ids.length ? out.ids[0] : null;
   const cm = LEADING_COUNTY_RE.exec(base);
@@ -535,6 +537,14 @@ function analyzeBox(links, master, filenames) {
     else settled.push(e);
   }
 
+  const allMasterIds = new Set(master.map(m => S(m.id)));
+  const folderOnlyMap = new Map();
+  for (const f of files) for (const id of f.candidateIds || []) {
+    if (allMasterIds.has(id) || Object.prototype.hasOwnProperty.call(links, id)) continue;
+    if (!folderOnlyMap.has(id)) folderOnlyMap.set(id, { id, files: [] });
+    folderOnlyMap.get(id).files.push(f);
+  }
+  const folderOnly = [...folderOnlyMap.values()].sort((a, b) => idCmp(a.id, b.id));
   const noip = check.filter(e => !e.link || !e.link.ip);
   const masterIds = new Set(rows.map(e => S(e.id)));
   const notInMaster = Object.keys(links)
@@ -556,7 +566,7 @@ function analyzeBox(links, master, filenames) {
 
   const dupIds = Object.keys(byId).filter(i => byId[i].length > 1).sort(idCmp);
 
-  return { rows, check, have, label, settled, oos, noip, notInMaster,
+  return { rows, check, have, label, settled, oos, noip, notInMaster, folderOnly,
     files, clickbox, byId, dupIds, fileFlags };
 }
 
@@ -675,6 +685,7 @@ let state = {
 };
 let result = null, columns = null;
 let pendingAutomation = null;
+let lookupId = "";
 
 function saveFound() { store.set("found", state.found); }
 function foundOf(id) { return state.found[id] || null; }
@@ -859,8 +870,8 @@ function renderSummary() {
     ["files", r.fileFlags.noName.length + r.fileFlags.nameOff.length +
       r.fileFlags.unmatched.length + r.fileFlags.orphan.length,
       "file name flags", "n-warn"],
-    ["missing", r.notInMaster.length, "linked, no master row",
-      r.notInMaster.length ? "n-bad" : "n-ok"],
+    ["missing", r.notInMaster.length + r.folderOnly.length, "IDs needing reconciliation",
+      r.notInMaster.length + r.folderOnly.length ? "n-bad" : "n-ok"],
   ];
   document.getElementById("summary").innerHTML = stats.map(([id, n, txt, cls]) =>
     `<div class="stat ${state.tab === id ? "active" : ""}" data-tab="${id}">
@@ -872,7 +883,7 @@ function renderSummary() {
 
 const TABS = [["check", "check list"], ["have", "in sharepoint"],
   ["columns", "sheet columns"], ["files", "file names"],
-  ["settled", "settled"], ["missing", "not in the master"]];
+  ["settled", "settled"], ["missing", "missing sheet records"], ["lookup", "find an ID"]];
 
 function renderTabs() {
   document.getElementById("tabs").innerHTML = TABS.map(([id, txt]) =>
@@ -908,6 +919,7 @@ function renderPanel() {
   else if (state.tab === "columns") p.innerHTML = viewColumns(r);
   else if (state.tab === "files") p.innerHTML = viewFiles(r);
   else if (state.tab === "settled") p.innerHTML = viewSettled(r);
+  else if (state.tab === "lookup") p.innerHTML = viewLookup(r);
   else p.innerHTML = viewMissing(r);
   wirePanel();
 }
@@ -1129,7 +1141,6 @@ function viewSettled(r) {
     <span class="note">The sheet already records no box for these and SharePoint
       has no file for them, so they are not in the check list. Their three
       columns paste back exactly as the sheet has them.</span></div>
-  ${automationPreview()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
     <th>Detection</th><th>Box</th><th>Verified</th></tr></thead><tbody>` +
     list.map(e => `<tr class="settled"><td><span class="chip">${h(e.id)}</span></td>
@@ -1141,9 +1152,14 @@ function viewSettled(r) {
 
 /* --- linked signals with no master row --- */
 function viewMissing(r) {
-  if (!r.notInMaster.length)
-    return `<div class="empty">Every signal in the links sheet has a master row.</div>`;
   return `<div class="step">
+    <b>Filename IDs absent from both sheets (${r.folderOnly.length})</b>
+    <p>These are candidate IDs from the folder listing. Confirm each filename refers to a signal,
+    then reconcile the sheets. No controller address or master row is inferred.</p>
+    ${r.folderOnly.length ? `<table><thead><tr><th>Candidate ID</th><th>Files found in SharePoint listing</th></tr></thead>
+      <tbody>${r.folderOnly.map(e => `<tr><td>${h(e.id)}</td><td>${e.files.map(f => h(f.name)).join("<br>")}</td></tr>`).join("")}</tbody></table>`
+      : `<p>No candidate IDs are absent from both sheets.</p>`}
+  </div><div class="step">
     <b>${r.notInMaster.length} signals are in the links sheet with no row in the
     master sheet.</b> They get no box check because there is no row to record it
     on. Raise these with the supervisor.
@@ -1156,8 +1172,38 @@ function viewMissing(r) {
   </tr>`).join("")}</tbody></table>`;
 }
 
+function viewLookup(r) {
+  const id = S(lookupId);
+  const ms = (state.master || []).filter(m => S(m.id) === id);
+  const lk = state.links && state.links[id];
+  const sameStreet = (a, b) => S(a).toUpperCase().replace(/\s+/g, " ") === S(b).toUpperCase().replace(/\s+/g, " ");
+  const candidates = !ms.length && lk && S(lk.main) && S(lk.side) ? (state.master || []).filter(m =>
+    (sameStreet(m.s1, lk.main) && sameStreet(m.s2, lk.side)) ||
+    (sameStreet(m.s2, lk.main) && sameStreet(m.s1, lk.side))) : [];
+  const files = r.files.filter(f => f.ids.includes(id) || (f.candidateIds || []).includes(id));
+  const home = r.rows.find(e => S(e.id) === id);
+  const f = foundOf(id) || {};
+  return `<div class="bar"><input id="idLookup" class="filter" placeholder="Four-digit signal ID" value="${h(id)}">
+    <span class="note">Search all loaded inputs, regardless of the check-list filter.</span></div>` +
+    (!/^\d{4}$/.test(id) ? `<div class="empty">Enter a four-digit ID to see where it appears.</div>` :
+    `<div class="step"><b>Signal ${h(id)}</b>
+      <p>Master sheet: ${ms.length ? ms.map(m => `row ${m.row}: ${h([m.s1, m.s2].filter(Boolean).join(" @ "))}`).join("; ") : "no matching ID"}.</p>
+      ${candidates.length ? `<p>Matching intersection text in master: ${candidates.map(m => `row ${m.row} (ID ${h(S(m.id) || "blank")})`).join("; ")}. Verify before filling or correcting the ID cell.</p>` : ""}
+      <p>Links sheet: ${lk ? `row ${lk.row}: ${h([lk.main, lk.side].filter(Boolean).join(" @ "))}` : "no matching ID"}.</p>
+      <p>Folder listing: ${files.length} matching filename${files.length === 1 ? "" : "s"}${!state.listing ? " (no folder listing loaded)" : ""}.</p>
+      ${files.length ? `<ul>${files.map(file => `<li>${h(file.name)}${file.id !== id ? " — candidate only; not assigned to this ID" : ""}</li>`).join("")}</ul>` : ""}
+      <p>Page status: ${home ? home.status === "have" ? "in SharePoint already — removed from the controller check list" : home.status === "settled" ? "settled by the sheet" : "in the controller check list" : "no in-scope master row for this ID"}.</p>
+      <p>Recorded BIU answer: ${h(f.biu || "none")}. Finding a file does not record a manual BIU check.</p>
+      ${!ms.length || !lk ? "<p>A missing ID can mean a missing row, a blank/mistyped ID, or a different spreadsheet version. Compare the intersection before adding a row.</p>" : ""}
+    </div>`);
+}
+
 /* ---------- panel wiring ---------- */
 function wirePanel() {
+  const lookup = document.getElementById("idLookup");
+  if (lookup) lookup.oninput = () => { lookupId = lookup.value; renderPanel();
+    const next = document.getElementById("idLookup");
+    next.focus(); next.setSelectionRange(next.value.length, next.value.length); };
   const flt = document.getElementById("flt");
   if (flt) flt.oninput = () => { state.filter = flt.value; renderPanel();
     const f2 = document.getElementById("flt");

@@ -62,6 +62,27 @@ class BrowserTests(unittest.TestCase):
                 inspect_modules(page, PROFILE)
         ctx.close()
 
+    def test_source_lookup_and_missing_folder_ids(self):
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        page.goto((Path(__file__).resolve().parents[1] / 'webapp/box.html').as_uri())
+        page.evaluate("""() => { loadDemo();
+          state.listing.push('4822_ELM_OAK.cbx');
+          state.master.push({row:20,id:'',s1:'KY 33',s2:'HICKORY CT',county:'CEDARTON'});
+          refresh(); }""")
+        page.locator('#tabs [data-tab="missing"]').click()
+        self.assertIn('4822', page.locator('#panel').inner_text())
+        self.assertIn('absent from both sheets', page.locator('#panel').inner_text())
+        page.locator('#tabs [data-tab="lookup"]').click()
+        page.locator('#idLookup').fill('4102')
+        self.assertIn('removed from the controller check list', page.locator('#panel').inner_text())
+        page.locator('#idLookup').fill('4120')
+        self.assertIn('row 20 (ID blank)', page.locator('#panel').inner_text())
+        page.locator('#idLookup').fill('4822')
+        self.assertIn('candidate only', page.locator('#panel').inner_text())
+        self.assertIn('no matching ID', page.locator('#panel').inner_text())
+        ctx.close()
+
     def test_html_preview_apply_persistence_and_no_network(self):
         ctx = self.browser.new_context(accept_downloads=True)
         page = ctx.new_page()

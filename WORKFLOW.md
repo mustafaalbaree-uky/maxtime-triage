@@ -229,3 +229,18 @@ For the calibrated browser automation workflow, use
 [`downloader/BIU_CHECK.md`](downloader/BIU_CHECK.md). Export the automation
 worklist from the updated box page, calibrate once, test one controller, then
 review/import `results.json`. BIU configuration downloads remain manual.
+
+### Finding an ID that seems to be missing
+
+In the box page, use **find an ID** to see its master row(s), links-sheet row,
+matching folder filenames, and current page status. This searches all loaded
+inputs independently of the check-list filter. A saved file moves an existing
+master row to **in sharepoint**, so it no longer appears in the controller check
+list. When the links intersection exactly matches a master row carrying a blank
+or different ID, the lookup shows that row for manual verification.
+
+**Missing sheet records** also lists candidate four-digit IDs from folder
+filenames that occur in neither sheet. These remain unverified: filename numbers
+can be route numbers. They do not create master rows, controller links, or BIU
+answers automatically. Compare the intersection and check spreadsheet versions
+before adding or correcting a record.
