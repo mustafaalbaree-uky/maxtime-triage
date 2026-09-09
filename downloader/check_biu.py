@@ -27,6 +27,31 @@ TABLES_JS = r"""() => {
  })).filter(t => t.visible && t.rows.length > 1);
 }"""
 
+DIAGNOSE_JS = r"""() => {
+ const cut = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '...' : s; };
+ const visible = e => !!(e.getClientRects().length);
+ const cls = e => cut(typeof e.className === 'string' ? e.className : '', 40);
+ const rows = e => Array.from(e.querySelectorAll('tr,[role=row]'));
+ const leaves = Array.from(document.querySelectorAll('body *')).filter(e =>
+   !e.children.length && visible(e) && /\b(BIU|TS2|DR1|SIU|module)\b/i.test(e.textContent || ''));
+ return {
+   url: location.href.split('?')[0],  // The hash route names the screen; the query can carry a token.
+   title: cut(document.title, 80),
+   counts: {table: document.querySelectorAll('table').length,
+            grid: document.querySelectorAll('[role=grid]').length,
+            row: document.querySelectorAll('tr,[role=row]').length,
+            select: document.querySelectorAll('select').length,
+            input: document.querySelectorAll('input').length,
+            canvas: document.querySelectorAll('canvas').length,
+            frame: document.querySelectorAll('iframe,frame').length},
+   grids: Array.from(document.querySelectorAll('table,[role=grid]')).map((t, index) => ({
+     index, tag: t.tagName.toLowerCase(), cls: cls(t), visible: visible(t),
+     rows: rows(t).length, visibleRows: rows(t).filter(visible).length,
+     text: cut(t.innerText, 200)})),
+   hits: leaves.slice(0, 12).map(e => e.tagName.toLowerCase() + ' .' + cls(e) + ' :: ' + cut(e.textContent, 70))
+ };
+}"""
+
 
 def norm(value):
     return re.sub(r'\s+', ' ', str(value)).strip().casefold()
@@ -149,35 +174,112 @@ def navigate(page, url, username, password):
         click_text(page, '^' + re.escape(label) + '$')
 
 
-def stable_tables(page):
-    previous = None
-    stable_since = time.monotonic()
-    until = time.monotonic() + 15
-    while time.monotonic() < until:
-        # Some controller firmware renders the IO screen inside an iframe.
-        # Inspect every frame while retaining the same strict table rules.
-        tables = []
-        for frame in page.frames:
+def snapshot(page):
+    """Every readable table in this browser session, keyed by position so one
+    table can be followed between polls. Some firmware renders the IO screen
+    inside an iframe, and manual navigation can land it in a second tab."""
+    tables, unreadable = {}, 0
+    for tab, other in enumerate(page.context.pages):
+        if other.is_closed():
+            continue
+        for index, frame in enumerate(other.frames):
             try:
-                tables.extend(frame.evaluate(TABLES_JS))
+                found = frame.evaluate(TABLES_JS)
             except Exception:
                 # A frame can disappear during navigation; retry on the next poll.
+                unreadable += 1
                 continue
-        if tables != previous:
-            stable_since = time.monotonic()
-            previous = tables
-        if tables and time.monotonic() - stable_since >= 2:
-            return tables
+            for table in found:
+                tables[(tab, index, table['index'])] = table['rows']
+    return tables, unreadable
+
+
+def changed_cell(before, after):
+    if len(before) != len(after):
+        return 'row count went %d to %d' % (len(before), len(after))
+    for i, (a, b) in enumerate(zip(before, after)):
+        if a != b:
+            return 'row %d went %r to %r' % (i + 1, ' | '.join(a)[:60], ' | '.join(b)[:60])
+    return 'contents changed'
+
+
+def stable_tables(page, hold=2.0, budget=15.0):
+    """Tables whose own rows stopped changing. Judging each table separately
+    keeps a clock or a live status table elsewhere on the screen from blocking
+    the module list, which no amount of waiting would have fixed."""
+    seen, since, churn, unreadable = {}, {}, {}, 0
+    until = time.monotonic() + budget
+    while True:
+        now = time.monotonic()
+        tables, unreadable = snapshot(page)
+        for key, rows in tables.items():
+            if seen.get(key) != rows:
+                if key in seen:
+                    churn[key] = changed_cell(seen[key], rows)
+                since[key] = now
+        seen = tables
+        ready = [dict(rows=rows) for key, rows in tables.items() if now - since[key] >= hold]
+        if ready:
+            return ready
+        if now >= until:
+            if not tables:
+                detail = 'no table with more than one visible row was found'
+                if unreadable:
+                    detail += '; %d frame(s) could not be read' % unreadable
+            else:
+                detail = '%d table(s) found, none held still for %gs (%s)' % (
+                    len(tables), hold, next(iter(churn.values()), 'rows appeared or disappeared'))
+            raise RuntimeError('No stable, readable IO module table: ' + detail)
         page.wait_for_timeout(250)
-    raise RuntimeError('No stable, readable IO module table')
+
+
+def diagnose(page, path):
+    """Say what the screen actually contains when no table can be read."""
+    report = []
+    for other in page.context.pages:
+        if other.is_closed():
+            continue
+        frames = []
+        for frame in other.frames:
+            try:
+                frames.append(frame.evaluate(DIAGNOSE_JS))
+            except Exception as exc:
+                frames.append(dict(error=type(exc).__name__))
+        report.append(frames)
+    print('\nWhat this browser session contains right now:')
+    for tab, frames in enumerate(report):
+        print('Tab %d' % (tab + 1))
+        for i, frame in enumerate(frames):
+            if 'error' in frame:
+                print('  frame %d could not be read (%s)' % (i + 1, frame['error']))
+                continue
+            print('  frame %d %s  %s' % (i + 1, frame['url'], frame['title']))
+            print('    ' + ', '.join('%s=%s' % kv for kv in frame['counts'].items()))
+            for grid in frame['grids']:
+                print('    %s %d: visible=%s rows=%d visible_rows=%d :: %s'
+                      % (grid['tag'], grid['index'], grid['visible'], grid['rows'],
+                         grid['visibleRows'], grid['text']))
+            for hit in frame['hits']:
+                print('    text: ' + hit)
+    path.write_text(json.dumps(report, indent=2), encoding='utf-8')
+    print('Full report:', path)
+    print('It holds page structure and visible text from this screen, no password.')
 
 
 def setup(page, row, path):
     page.goto(row['maxtime_url'], wait_until='domcontentloaded')
     print('\nIn the opened browser, sign in and open Controller > Advanced IO >')
     print('Cabinet Configuration > IO Modules. Do not change configuration.')
-    input('When the complete module list is visible, press Enter here: ')
-    tables = stable_tables(page)
+    tables = None
+    while tables is None:
+        input('When the complete module list is visible, press Enter here: ')
+        try:
+            tables = stable_tables(page)
+        except RuntimeError as exc:
+            print(str(exc))
+            diagnose(page, path.with_name('biu-diagnostic.json'))
+            if input('Press Enter to read the page again, or type QUIT: ').strip().upper() == 'QUIT':
+                raise ValueError('Setup stopped; no profile saved')
     for i, table in enumerate(tables):
         print('\nTable', i + 1)
         for cells in table['rows']:

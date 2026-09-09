@@ -58,9 +58,16 @@ than all available options. Confirm the proposed answer with `AGREE` only if
 you agree with your manual check. This creates `biu-profile.json`, which holds
 column headings and column numbers, not credentials or controller addresses.
 
-If there is no readable table, or setup reports `unknown`, stop there: this
-firmware needs an adapter. Report the terminal message and describe the table
-layout/column names. There is no need to send a password, HAR file, or cookies.
+If it cannot read a table it says why, prints what the screen actually
+contains (tabs, frames, tables, rows, and any visible text mentioning a module
+type) and writes the same detail to `biu-diagnostic.json`. Press Enter to read
+again once the page has settled, or type `QUIT`. A clock or a live status table
+elsewhere on the screen no longer blocks the read; each table is judged on its
+own contents.
+
+If the module list still cannot be read, or setup reports `unknown`, stop
+there: this firmware needs an adapter. Send `biu-diagnostic.json` and the
+terminal message. There is no need to send a password, HAR file, or cookies.
 
 ## Test automatic navigation on one controller
 

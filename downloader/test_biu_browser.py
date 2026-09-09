@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from playwright.sync_api import sync_playwright
 
-from check_biu import navigate, inspect_modules, classify, SCHEMA
+from check_biu import navigate, inspect_modules, classify, stable_tables, diagnose, SCHEMA
 from test_biu import PROFILE
 
 MOCK = '''<!doctype html><body>
@@ -60,6 +60,36 @@ class BrowserTests(unittest.TestCase):
             page.set_content(body)
             with self.assertRaises(RuntimeError):
                 inspect_modules(page, PROFILE)
+        ctx.close()
+
+    def test_a_live_table_elsewhere_does_not_block_the_module_table(self):
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        page.set_content("""<h1>IO Modules</h1>
+          <table><tr><th>Status</th><th>Value</th></tr><tr><td>Time</td><td id=t>0</td></tr></table>
+          <table><tr><th>Module</th><th>Type</th></tr><tr><td>1</td><td>SIU</td></tr></table>
+          <script>setInterval(() => t.textContent = Date.now(), 100)</script>""")
+        self.assertEqual(classify(inspect_modules(page, PROFILE), PROFILE)[0], 'no')
+        ctx.close()
+
+    def test_missing_and_restless_tables_name_their_reason(self):
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        page.set_content('<h1>IO Modules</h1><div class=grid><div>Module 1</div><div>TS2 DR1 BIU</div></div>')
+        with self.assertRaises(RuntimeError) as missing:
+            stable_tables(page, hold=0.3, budget=1)
+        self.assertIn('no table with more than one visible row', str(missing.exception))
+        with tempfile.TemporaryDirectory() as d:
+            report = Path(d) / 'biu-diagnostic.json'
+            diagnose(page, report)
+            text = report.read_text()
+        self.assertIn('TS2 DR1 BIU', text)  # The structure report shows what the table reader could not.
+        page.set_content("""<table><tr><th>Module</th><th>Type</th></tr>
+          <tr><td>1</td><td id=v>SIU</td></tr></table>
+          <script>setInterval(() => v.textContent = Date.now(), 100)</script>""")
+        with self.assertRaises(RuntimeError) as restless:
+            stable_tables(page, hold=0.5, budget=2)
+        self.assertIn('none held still', str(restless.exception))
         ctx.close()
 
     def test_source_lookup_and_missing_folder_ids(self):
