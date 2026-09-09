@@ -67,7 +67,8 @@ class ClassificationTests(unittest.TestCase):
         logic = html.split('const S =', 1)[1].split('/* ================= LOGIC-END', 1)[0]
         js = 'const S =' + logic + r'''
 const assert = require('node:assert/strict');
-const check = [{id:'4821',url:'http://192.0.2.1'}, {id:'4822',url:'http://192.0.2.2'}];
+const check = [{id:'4821',url:'http://192.0.2.1',box_url:'http://192.0.2.1:57150/'},
+               {id:'4822',url:'http://192.0.2.2',box_url:'http://192.0.2.2:57150/'}];
 const row = {id:'4821',maxtime_url:check[0].url,biu:'no',evidence:[['Module','Type'],['1','SIU']]};
 const run = (rows, found={}) => automationProposals({schema:'maxtime-biu-v1',results:rows},check,found);
 assert.equal(run([row])[0].skip, '');
@@ -80,7 +81,6 @@ assert.equal(run([{...row,evidence:[]}])[0].skip, '');
 assert.ok(run([row,row]).every(r => r.skip));
 assert.equal(run([row])[0].kind, 'ready');
 assert.equal(run([row],{'4821':{biu:'yes'}})[0].kind, 'confirmed');
-assert.equal(run([row],{'4821':{biu:'yes',unconfirmed:true}})[0].kind, 'ready');
 assert.equal(run([{...row,biu:'unknown'}])[0].kind, 'open');
 assert.equal(run([{...row,evidence:[]}])[0].kind, 'failed');
 assert.equal(run([{...row,biu:'unknown',evidence:[]}])[0].kind, 'failed');
@@ -89,11 +89,11 @@ assert.throws(() => automationProposals({},check,{}));
 const again = f => stillToRun(check, f).map(e => e.id);
 assert.deepEqual(again({}), ['4821','4822']);
 assert.deepEqual(again({'4821':{biu:'no'}}), ['4822']);
-assert.deepEqual(again({'4821':{biu:'no',unconfirmed:true}}), ['4822']);
 assert.deepEqual(again({'4821':{saved:true}}), ['4822']);
-assert.deepEqual(again({'4821':{unconfirmed:true}}), ['4822']);          // Unknown, waiting on you.
-assert.deepEqual(again({'4821':{unconfirmed:true,failed:true}}), ['4821','4822']);  // Retry this one.
-assert.deepEqual(boxesToDownload(check,{'4821':{biu:'yes'}}).map(e=>e.id), []);
+assert.deepEqual(again({'4821':{undecided:true}}), ['4822']);          // Waiting on you.
+assert.deepEqual(again({'4821':{failed:true}}), ['4821','4822']);      // Retry this one.
+assert.deepEqual(boxesToDownload(check,{'4821':{biu:'yes'}}).map(e=>e.id), ['4821']);
+assert.deepEqual(boxesToDownload(check,{'4821':{biu:'yes',saved:true}}).map(e=>e.id), []);
 const links = {'4821': {row:2,main:'MAIN',side:'OAK',ip:'192.0.2.1',url:'http://192.0.2.1'}};
 const master = [{id:'4821',row:2,county:'ALDER',s1:'MAIN',s2:'OAK'}];
 const audit = analyzeBox(links,master,['4821_MAIN_OAK.cbx','4822_OTHER.cbx','4822_OTHER_copy.cbx','export_20260908.cbx','4823_sheet.xlsx']);

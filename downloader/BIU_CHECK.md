@@ -159,35 +159,25 @@ independently prove the controller's physical intersection identity.
 ## Review and import
 
 Load a run with **Newest script run**, or **Review script results** for one
-`results.json` by hand. The rows are marked immediately; nothing is hidden
-behind a separate confirm step.
+`results.json` by hand. Answers are recorded as they stand; there is no
+separate confirming step. Every row keeps the module table it was read from,
+open in the **Script evidence** column beside the answer.
 
-Every row a run touched is flagged red on the check list until you confirm it,
-and its **Script evidence** column holds the reason, the run it came from, and
-the module table the answer was read off. Three kinds of flag:
+The rows say their own state:
 
-- **unconfirmed** with an answer already set. Press **confirm** to accept it,
-  or press the other answer to overrule it. Either one clears the flag.
-- **no answer**: the script read a module table but the rule did not cover it,
-  usually a module type calibration has not seen. Read the evidence and press
-  **BIU, box** or **no BIU**.
-- **check failed**: the script never got a readable table. Login, navigation
-  or the read itself failed, and the reason says which. These carry no answer,
-  so the next exported worklist asks for them again.
+- **Blue**: a box whose configuration file is not saved to SharePoint yet.
+  This is the download list, and the bar counts it.
+- **Red**: no answer at all. Either the script could not read the controller
+  (`check failed`, with the reason), or it read a module table the rule did
+  not cover (`no answer`), or nothing has touched the row yet (`not checked`).
+- **Plain**: a `no`, or a `yes` whose file is saved. Nothing owed.
 
-Nothing a run reported is dropped. Results that cannot go on a row at all, a
-duplicate ID, an ID missing from the check list, a controller URL that differs
-from the worklist, are listed by ID in a banner that stays until dismissed.
-The bar under the list carries the running count, `12 to confirm, 3 the script
-could not read`.
+Results that cannot go on a row at all, a duplicate ID, an ID missing from the
+check list, a controller URL that differs from the worklist, are listed by ID
+in a banner that stays until dismissed. Nothing a run reported is dropped.
 
-Confirmed answers are left alone by later runs. An unconfirmed one is replaced
-by a newer run, so re-running a controller and importing again is safe.
-
-- `yes` reveals the `:57150` link once confirmed. Fetch and save the box file
-  manually, then mark it saved as before.
-- Nothing is owed a download until its answer is confirmed.
-- Already answered rows are skipped on import; change those on the row itself.
+A later run leaves any row that already has an answer alone, and replaces one
+that carries none, so re-running and importing again is safe.
 
 ## Doing the rest without repeating yourself
 

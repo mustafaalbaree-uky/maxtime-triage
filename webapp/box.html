@@ -76,7 +76,8 @@
   .why.w-noip { background: #eeeeef; color: var(--muted); }
   .step.loud { border-left: 4px solid var(--bad); }
   .bad { color: var(--bad); }
-  tr.unconfirmed td { background: #fff5f4; }
+  tr.owed td { background: #eaf1ff; }        /* a box whose file is not saved yet */
+  tr.noanswer td { background: #fff5f4; }   /* nothing answered it, for any reason */
   .flag { background: var(--bad); color: #fff; border-radius: 6px; padding: 1px 7px;
     font-size: 11.5px; font-weight: 600; white-space: nowrap; }
   .ev { font-size: 11.5px; color: var(--muted); }
@@ -126,7 +127,7 @@
   <h1>MaxTime Box Triage</h1>
   <div class="sub">Clickbox configuration coverage, computed locally, nothing uploaded</div>
   <div class="spacer"></div>
-  <span class="sub">box.html 2026-09-09.4</span>
+  <span class="sub">box.html 2026-09-09.5</span>
   <a href="index.html">Timing triage</a>
   <button id="btnDemo">Load demo data</button>
   <button id="btnClear">Clear saved data</button>
@@ -662,14 +663,14 @@ function automationProposals(payload, check, found) {
     if (counts.get(id) !== 1) skip = "Duplicate ID in results";
     else if (!e) skip = "Not in the current check list";
     else if (S(e.url) !== S(r.maxtime_url)) skip = "Controller URL differs from this worklist";
-    else if (f.saved || (f.biu && !f.unconfirmed)) skip = "Already answered and confirmed";
+    else if (f.saved || f.biu) skip = "Already answered";
     // ready: the script proposed an answer. open: it read a table but the rule
     // did not cover it. failed: it never got a readable table, which is a
     // result in its own right and belongs on the row rather than in a count.
     let kind = "blocked";
     if (!skip) kind = ["yes", "no"].includes(r.biu) ? (readable ? "ready" : "failed")
       : readable ? "open" : "failed";
-    else if (skip === "Already answered and confirmed") kind = "confirmed";
+    else if (skip === "Already answered") kind = "confirmed";
     return { id, biu: r.biu, reason: S(r.reason), checked_at: S(r.checked_at),
       evidence: Array.isArray(r.evidence) ? r.evidence : [], skip, kind };
   });
@@ -683,16 +684,16 @@ function newestRun(names) {
 function stillToRun(check, found) {
   return check.filter(e => {
     const f = found[S(e.id)] || {};
-    // A failed check carries no answer and is what a re-run is for. A row the
-    // rule could not cover needs your eyes, not another visit.
-    return S(e.url) && !f.biu && !f.saved && (!f.unconfirmed || f.failed);
+    // Never touched, or the check failed. A row the rule could not decide
+    // needs your eyes, not another visit.
+    return S(e.url) && !f.biu && !f.saved && !f.undecided;
   });
 }
 
 function boxesToDownload(check, found) {
   return check.filter(e => {
     const f = found[S(e.id)] || {};
-    return f.biu === "yes" && !f.unconfirmed && !f.saved && S(e.box_url);
+    return f.biu === "yes" && !f.saved && S(e.box_url);
   });
 }
 
@@ -713,7 +714,7 @@ let state = {
   listing: store.get("listing", null),
   listingLabel: store.get("listingLabel", ""),
   found: store.get("found", {}),   // signal id -> {biu:"yes"|"no", saved, note,
-                                   // unconfirmed, failed, evidence, reason, run}
+                                   // failed, undecided, evidence, reason, run}
   lastImport: store.get("lastImport", null),
   tab: store.get("tab", "check"),
   filter: "",
@@ -729,10 +730,12 @@ function importRun(payload, label) {
   for (const p of proposals) {
     if (!["ready", "open", "failed"].includes(p.kind)) continue;
     const cur = state.found[p.id] || {};
-    state.found[p.id] = { ...cur, saved: false, unconfirmed: true,
+    // An answer is recorded as it stands. What carries no answer stays flagged:
+    // undecided means the rule did not cover it, failed means nothing was read.
+    state.found[p.id] = { ...cur, saved: false,
       biu: p.kind === "ready" ? p.biu : null,
-      failed: p.kind === "failed", evidence: p.evidence,
-      reason: p.reason, checked_at: p.checked_at, run: label };
+      undecided: p.kind === "open", failed: p.kind === "failed",
+      evidence: p.evidence, reason: p.reason, checked_at: p.checked_at, run: label };
   }
   state.lastImport = { run: label, at: new Date().toISOString(),
     ready: count("ready"), open: count("open"), failed: count("failed"),
@@ -800,11 +803,11 @@ function foundOf(id) { return state.found[id] || null; }
 function setFound(id, patch) {
   const cur = state.found[id] || {};
   const next = { ...cur, ...patch };
-  if (next.biu == null && !next.unconfirmed) {
-    delete next.evidence; delete next.reason; delete next.checked_at;
-    delete next.run; delete next.failed;
+  const flagged = next.failed || next.undecided;
+  if (next.biu == null && !flagged) {
+    delete next.evidence; delete next.reason; delete next.checked_at; delete next.run;
   }
-  if (next.biu == null && !next.saved && !S(next.note) && !next.unconfirmed)
+  if (next.biu == null && !next.saved && !S(next.note) && !flagged)
     delete state.found[id];
   else state.found[id] = next;
   saveFound(); refresh();
@@ -970,14 +973,15 @@ function refresh() {
 
 function fieldDone(e) {
   const f = foundOf(S(e.id));
-  return !!(f && !f.unconfirmed && (f.biu === "no" || (f.biu === "yes" && f.saved)));
+  return !!(f && (f.biu === "no" || (f.biu === "yes" && f.saved)));
 }
 
 function renderSummary() {
   const r = result;
   const open = r.check.filter(e => !fieldDone(e)).length;
+  const owe = boxesToDownload(r.check, state.found).length;
   const flag = k => r.check.filter(e => (foundOf(S(e.id)) || {})[k]).length;
-  const waiting = flag("unconfirmed"), failed = flag("failed");
+  const failed = flag("failed"), undecided = flag("undecided");
   const stats = [
     ["check", open, "need a controller check", open ? "n-bad" : "n-ok"],
     ["have", r.have.length, "in SharePoint already", "n-ok"],
@@ -1045,8 +1049,9 @@ function viewCheck(r) {
   let list = r.check.filter(matchesFilter);
   if (state.hideDone) list = list.filter(e => !fieldDone(e));
   const open = r.check.filter(e => !fieldDone(e)).length;
+  const owe = boxesToDownload(r.check, state.found).length;
   const flag = k => r.check.filter(e => (foundOf(S(e.id)) || {})[k]).length;
-  const waiting = flag("unconfirmed"), failed = flag("failed");
+  const failed = flag("failed"), undecided = flag("undecided");
   const rows = list.map(e => {
     const f = foundOf(S(e.id)) || {};
     const done = fieldDone(e);
@@ -1055,7 +1060,9 @@ function viewCheck(r) {
       : `<span class="why w-noip">no IP</span>`;
     const bx = e.box_url && f.biu === "yes"
       ? `<br><a href="${h(e.box_url)}" target="_blank" rel="noopener">:57150</a>` : "";
-    return `<tr class="${done ? "settled" : ""}${f.unconfirmed ? " unconfirmed" : ""}" data-id="${h(e.id)}">
+    const owed = f.biu === "yes" && !f.saved;   // A box whose file is not saved yet.
+    const noAnswer = !f.biu;                   // Failed, undecided, or never touched.
+    return `<tr class="${owed ? "owed" : noAnswer ? "noanswer" : done ? "settled" : ""}" data-id="${h(e.id)}">
       <td><span class="chip">${h(e.id)}</span><br><span style="font-size:11.5px;color:#5b6b7b">row ${e.row}</span></td>
       <td>${h(e.county)}</td>
       <td>${h(intersection(e))}</td>
@@ -1072,16 +1079,14 @@ function viewCheck(r) {
         ${f.biu === "yes" ? `<label style="font-size:12.5px;display:block;margin-top:4px">
           <input type="checkbox" class="savedbox" data-id="${h(e.id)}" ${f.saved ? "checked" : ""}>
           exported and saved to SharePoint</label>` : ""}
-        ${f.unconfirmed ? `<div style="margin-top:4px">
-          <span class="flag">${f.failed ? "check failed" : f.biu ? "unconfirmed" : "no answer"}</span>
-          ${f.biu ? `<button class="rbtn okbtn" data-id="${h(e.id)}">confirm</button>` : ""}
-        </div>` : ""}
+        ${noAnswer ? `<div style="margin-top:4px"><span class="flag">${
+          f.failed ? "check failed" : f.undecided ? "no answer" : "not checked"}</span></div>` : ""}
         ${f.biu ? `<input class="notebox notein" data-id="${h(e.id)}" placeholder="note"
           value="${h(f.note || "")}">` : ""}
       </td>
       <td class="ev">${f.reason || (Array.isArray(f.evidence) && f.evidence.length) ? `
         ${h(f.reason || "")}<br><small>${h(f.run || "")}</small>
-        ${Array.isArray(f.evidence) && f.evidence.length ? `<details><summary
+        ${Array.isArray(f.evidence) && f.evidence.length ? `<details open><summary
           style="cursor:pointer">module table</summary><pre>${h(f.evidence.map(row =>
             Array.isArray(row) ? row.join(" | ") : "").join("\n"))}</pre></details>` : ""}` : ""}
       </td></tr>`;
@@ -1118,8 +1123,10 @@ function viewCheck(r) {
     <label class="rbtn">Review script results <input id="autoResults" type="file" accept=".json" hidden></label>
     <span class="note">${open} of ${r.check.length} still open${r.noip.length
       ? `, ${r.noip.length} with no IP in the links sheet` : ""}</span>
-    ${waiting ? `<span class="flag">${waiting} to confirm${
-      failed ? ", " + failed + " the script could not read" : ""}</span>` : ""}
+    ${owe ? `<span class="chip">${owe} ${owe === 1 ? "box" : "boxes"} to export</span>` : ""}
+    ${failed || undecided ? `<span class="flag">${
+      [failed && failed + " the script could not read",
+       undecided && undecided + " with no answer"].filter(Boolean).join(", ")}</span>` : ""}
   </div>
   ${importReport()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
@@ -1133,13 +1140,12 @@ function viewCheck(r) {
 function importReport() {
   const i = state.lastImport;
   if (!i) return "";
-  const waiting = i.ready + i.open + i.failed;
   const bad = i.failed || i.blocked.length;
   return `<div class="step ${bad ? "loud" : ""}">
     <b>Run ${h(i.run)}</b>
-    <p>${waiting} ${waiting === 1 ? "row is" : "rows are"} flagged for confirmation:
-    ${i.ready} with an answer, ${i.open} the rule did not cover, ${i.failed} the script could not read.
-    ${i.confirmed ? i.confirmed + " already confirmed, left alone." : ""}</p>
+    <p>${i.ready} answered. ${i.open} the rule did not cover, ${i.failed} the script
+    could not read; those are flagged red and carry no answer.
+    ${i.confirmed ? i.confirmed + " already answered, left alone." : ""}</p>
     ${i.blocked.length ? `<p class="bad"><b>${i.blocked.length} could not be put on a row:</b></p>
       <ul>${i.blocked.map(b => `<li>${h(b.id)}: ${h(b.skip)}</li>`).join("")}</ul>` : ""}
     <button id="dismissImport">Dismiss</button></div>`;
@@ -1348,10 +1354,8 @@ function wirePanel() {
   for (const b of document.querySelectorAll(".rbtn[data-biu]"))
     b.onclick = () => setFound(b.dataset.id,
       { biu: b.dataset.biu === "clear" ? null : b.dataset.biu,
-        unconfirmed: false, failed: false,   // Answering a row is confirming it.
+        failed: false, undecided: false,
         saved: b.dataset.biu === "clear" ? false : undefined });
-  for (const b of document.querySelectorAll(".okbtn"))
-    b.onclick = () => setFound(b.dataset.id, { unconfirmed: false, failed: false });
   const dismiss = document.getElementById("dismissImport");
   if (dismiss) dismiss.onclick = () => {
     state.lastImport = null; store.del("lastImport"); renderPanel();
@@ -1467,6 +1471,18 @@ function loadDemo() {
   toast("Loaded synthetic demo data");
 }
 
+function migrateFound() {
+  let changed = false;
+  for (const f of Object.values(state.found)) {
+    if (!("unconfirmed" in f)) continue;
+    if (!f.biu && !f.failed) f.undecided = true;
+    delete f.unconfirmed;
+    changed = true;
+  }
+  if (changed) saveFound();
+}
+
+migrateFound();
 wireInputs();
 refresh();
 // The folder chosen last time comes back; reading it still needs a click.
