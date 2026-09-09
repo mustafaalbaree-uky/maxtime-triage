@@ -662,6 +662,13 @@ function automationProposals(payload, check, found) {
   });
 }
 
+function boxesToDownload(check, found) {
+  return check.filter(e => {
+    const f = found[S(e.id)] || {};
+    return f.biu === "yes" && !f.saved && S(e.box_url);
+  });
+}
+
 /* ================= LOGIC-END ================= */
 
 /* ---------- storage and state ---------- */
@@ -692,6 +699,7 @@ function foundOf(id) { return state.found[id] || null; }
 function setFound(id, patch) {
   const cur = state.found[id] || {};
   const next = { ...cur, ...patch };
+  if (next.biu == null) delete next.evidence;  // A cleared answer keeps no evidence.
   if (next.biu == null && !next.saved && !S(next.note)) delete state.found[id];
   else state.found[id] = next;
   saveFound(); refresh();
@@ -956,6 +964,10 @@ function viewCheck(r) {
           exported and saved to SharePoint</label>` : ""}
         ${f.biu ? `<input class="notebox notein" data-id="${h(e.id)}" placeholder="note"
           value="${h(f.note || "")}">` : ""}
+        ${Array.isArray(f.evidence) && f.evidence.length ? `<details><summary style="cursor:pointer;
+          color:#5b6b7b;font-size:12.5px">module table</summary><pre style="font-size:11.5px;
+          margin:4px 0 0;white-space:pre-wrap">${h(f.evidence.map(row =>
+            Array.isArray(row) ? row.join(" | ") : "").join("\n"))}</pre></details>` : ""}
       </td></tr>`;
   }).join("");
 
@@ -980,6 +992,9 @@ function viewCheck(r) {
       hide the ones I have done</label>
     <button class="primary" id="btnCsv">Export CSV</button>
     <button id="btnCopyIds">Copy ID list</button>
+    ${boxesToDownload(r.check, state.found).length
+      ? `<button class="primary" id="btnCopyBoxes">Copy the ${
+          boxesToDownload(r.check, state.found).length} boxes to download</button>` : ""}
     <button id="btnAutoCsv">Export automation worklist</button>
     <label class="rbtn">Review script results <input id="autoResults" type="file" accept=".json" hidden></label>
     <span class="note">${open} of ${r.check.length} still open${r.noip.length
@@ -1257,7 +1272,7 @@ function wirePanel() {
     const proposals = automationProposals(pendingAutomation, result.check, state.found);
     for (const p of proposals.filter(p => !p.skip)) {
       const cur = state.found[p.id] || {};
-      state.found[p.id] = { ...cur, biu: p.biu, saved: false,
+      state.found[p.id] = { ...cur, biu: p.biu, saved: false, evidence: p.evidence,
         note: [cur.note, "Reviewed script check " + p.checked_at + ": " + p.reason].filter(Boolean).join("; ") };
     }
     pendingAutomation = null;
@@ -1268,6 +1283,12 @@ function wirePanel() {
   const cid = document.getElementById("btnCopyIds");
   if (cid) cid.onclick = () => copyText(
     result.check.map(e => e.id).join("\n") + "\n", result.check.length + " IDs");
+  const cbx = document.getElementById("btnCopyBoxes");
+  if (cbx) cbx.onclick = () => {
+    const list = boxesToDownload(result.check, state.found);
+    copyText(list.map(e => `${e.id}\t${intersection(e)}\t${e.box_url}`).join("\n") + "\n",
+      list.length + " boxes to download");
+  };
   const clb = document.getElementById("btnCopyLabel");
   if (clb) clb.onclick = () => copyText(
     result.label.map(e => `${e.id}\trow ${e.row}\t${intersection(e)}`).join("\n") + "\n",

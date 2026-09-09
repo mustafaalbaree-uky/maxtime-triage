@@ -244,14 +244,27 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(found[work[1]['id']]['biu'], 'yes')
             self.assertFalse(found[work[1]['id']]['saved'])
             self.assertNotIn(work[2]['id'], found)
+            self.assertEqual(found[work[1]['id']]['evidence'][2], ['2', 'TS2 DR1 BIU'])
             page.reload()
             self.assertEqual(page.evaluate('state.found'), found)
+            # The module table stays on the row that the answer came from.
+            row = page.locator(f'#panel tr[data-id="{work[1]["id"]}"]')
+            row.locator('summary', has_text='module table').click()
+            self.assertIn('2 | TS2 DR1 BIU', row.locator('pre').inner_text())
+            # Every yes still owing a download, whether answered by hand or imported.
+            listed = 'boxesToDownload(result.check, state.found).map(e => String(e.id))'
+            self.assertEqual(sorted(page.evaluate(listed)), sorted([work[0]['id'], work[1]['id']]))
+            page.evaluate('(id) => setFound(id, {saved: true})', work[1]['id'])
+            self.assertEqual(page.evaluate(listed), [work[0]['id']])
+            page.evaluate('(id) => setFound(id, {saved: false})', work[1]['id'])
             with page.expect_download() as dl:
                 page.locator('#btnAutoCsv').click()
             text = Path(dl.value.path()).read_text()
             self.assertNotIn(work[0]['id'], text)
             self.assertNotIn(work[1]['id'], text)
             self.assertIn(work[2]['id'], text)
+        page.evaluate('(id) => setFound(id, {biu: null})', work[1]['id'])  # Clearing takes the evidence with it.
+        self.assertNotIn('evidence', page.evaluate('state.found')[work[1]['id']] or {})
         self.assertEqual(network, [])
         self.assertEqual(errors, [])
         ctx.close()
