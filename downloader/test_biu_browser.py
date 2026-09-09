@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from playwright.sync_api import sync_playwright
 
-from check_biu import navigate, inspect_modules, classify, stable_tables, diagnose, SCHEMA
+from check_biu import (navigate, inspect_modules, classify, stable_tables, diagnose,
+                       choose_account_type, SCHEMA)
 from test_biu import PROFILE
 
 LOGIN = '''<!doctype html><body>
@@ -157,6 +158,25 @@ class BrowserTests(unittest.TestCase):
         answer, why = classify([GRID_PROFILE['headers'], ['1', 'Model 2070 Something', 'Default']], GRID_PROFILE)
         self.assertEqual(answer, 'unknown')
         self.assertIn('model 2070 something', why)
+
+    def test_the_account_type_is_chosen_by_position_or_by_label(self):
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        form = ('<select><option>Local account</option><option>Profile server</option></select>'
+                '<input id=u><input type=password>')
+        for choice in ('2', 'profile server'):
+            with self.subTest(choice=choice):
+                page.set_content(form)
+                self.assertEqual(choose_account_type(page, choice), 'Profile server')
+                self.assertEqual(page.locator('select').input_value(), 'Profile server')
+        page.set_content(form)
+        with self.assertRaises(RuntimeError):
+            choose_account_type(page, '9')
+        # A custom dropdown is not a select, so the label is clicked instead.
+        page.set_content('<div onclick="this.textContent=\'chosen\'">Profile server</div>')
+        self.assertEqual(choose_account_type(page, 'Profile server'), 'Profile server')
+        self.assertEqual(page.locator('div').inner_text(), 'chosen')
+        ctx.close()
 
     def test_source_lookup_and_missing_folder_ids(self):
         ctx = self.browser.new_context()

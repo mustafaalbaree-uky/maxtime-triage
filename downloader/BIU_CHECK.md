@@ -77,6 +77,31 @@ If the module list still cannot be read, or setup reports `unknown`, stop
 there: this firmware needs an adapter. Send `biu-diagnostic.json` and the
 terminal message. There is no need to send a password, HAR file, or cookies.
 
+## If the login page asks for an account type
+
+Some firmware puts a dropdown above the username and password. Ask the script
+what it sees, at any screen, without signing in:
+
+```
+py check_biu.py biu_worklist.csv --describe --only 4821
+```
+
+Leave the browser on the login page and press Enter. It lists every visible
+control, and a dropdown is printed as its numbered options with a `*` on the
+one currently selected. It never prints anything you typed. Type `QUIT` to
+close it.
+
+Then pass the choice on every run, by label or by position:
+
+```
+py check_biu.py biu_worklist.csv --only 4821 --account-type "Profile server"
+py check_biu.py biu_worklist.csv --only 4821 --account-type 2
+```
+
+Prefer the label. A position silently picks a different account if the
+firmware ever reorders the list. The choice is made before the username and
+password are filled in, and the terminal prints what it selected.
+
 ## Test automatic navigation on one controller
 
 ```

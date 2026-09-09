@@ -74,7 +74,18 @@ DIAGNOSE_JS = r"""() => {
      index, tag: t.tagName.toLowerCase(), cls: cls(t), visible: visible(t),
      rows: rows(t).length, visibleRows: rows(t).filter(visible).length,
      text: cut(t.innerText, 200)})),
-   hits: leaves.slice(0, 12).map(e => e.tagName.toLowerCase() + ' .' + cls(e) + ' :: ' + cut(e.textContent, 70))
+   hits: leaves.slice(0, 12).map(e => e.tagName.toLowerCase() + ' .' + cls(e) + ' :: ' + cut(e.textContent, 70)),
+   controls: Array.from(document.querySelectorAll('select,input,button,[role=combobox],[role=listbox]')).filter(visible).slice(0, 25).map(e => {
+     const tag = e.tagName.toLowerCase();
+     const role = e.getAttribute('role') ? '[' + e.getAttribute('role') + ']' : '';
+     const name = [e.id, e.name, e.getAttribute('aria-label'), e.getAttribute('placeholder')].filter(Boolean).map(v => cut(v, 30)).join(' ');
+     // Option labels and which one is selected. Never any entered value.
+     if (tag === 'select') return 'select ' + name + ' :: ' + Array.from(e.options).map((o, i) => (o.selected ? '*' : '') + (i + 1) + ' ' + cut(o.textContent, 40)).join(' | ');
+     if (tag === 'input') return 'input[' + e.type + '] ' + name;
+     return tag + role + ' ' + name + ' :: ' + cut(e.textContent, 40);
+   }),
+   labels: Array.from(document.querySelectorAll('body *')).filter(e => !e.children.length && visible(e) &&
+     (e.textContent || '').trim() && (e.textContent || '').trim().length <= 40).slice(0, 20).map(e => cut(e.textContent, 40))
  };
 }"""
 
@@ -170,23 +181,38 @@ def click_text(page, pattern, timeout=8000):
     raise RuntimeError('Could not uniquely locate navigation: ' + pattern)
 
 
-def navigate(page, url, username, password):
+def choose_account_type(page, choice):
+    """Some firmware asks which kind of account before the credentials. The
+    choice is an exact option label, or a position such as 2."""
+    for select in page.locator('select:visible').all():
+        labels = [o.inner_text().strip() for o in select.locator('option').all()]
+        if choice.isdigit() and 1 <= int(choice) <= len(labels):
+            select.select_option(index=int(choice) - 1)
+            return labels[int(choice) - 1]
+        for i, label in enumerate(labels):
+            if norm(label) == norm(choice):
+                select.select_option(index=i)
+                return label
+    if choice.isdigit():
+        raise RuntimeError('No login dropdown with a choice number ' + choice)
+    click_text(page, '^' + re.escape(choice) + '$')  # A custom dropdown is not a select.
+    return choice
+
+
+def navigate(page, url, username, password, account_type=None):
     page.goto(url, wait_until='domcontentloaded')
     try:
         click_text(page, r'^Sign\s*in(?:\s*to)?$', 3000)
     except RuntimeError:
         pass  # Some firmware opens the login form directly, or has an open session.
-    if not page.locator('input[type=password]:visible').count():
+    if not page.locator('input[type=password]:visible').count() and not account_type:
         try:
             click_text(page, r'^Profile\s*server$', 3000)
         except RuntimeError:
             pass
-    else:
-        # Profile server can be a native select beside the login fields.
-        try:
-            click_text(page, r'^Profile\s*server$', 1000)
-        except RuntimeError:
-            pass
+    if account_type:
+        # Chosen before the fields are read, since it can redraw the form.
+        print('Account type:', choose_account_type(page, account_type))
     pw = page.locator('input[type=password]:visible')
     if pw.count():
         user = page.locator('input:visible:not([type=password]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio])')
@@ -307,9 +333,21 @@ def diagnose(page, path):
                          grid['visibleRows'], grid['text']))
             for hit in frame['hits']:
                 print('    text: ' + hit)
+            for control in frame['controls']:
+                print('    ' + control)
+            if not frame['grids']:
+                print('    labels: ' + ' | '.join(frame['labels']))
     path.write_text(json.dumps(report, indent=2), encoding='utf-8')
     print('Full report:', path)
     print('It holds page structure and visible text from this screen, no password.')
+
+
+def describe(page, row, path):
+    """Open a controller and say what is on whatever screen you put up."""
+    page.goto(row['maxtime_url'], wait_until='domcontentloaded')
+    print('\nIn the opened browser, bring up the screen you want described.')
+    while input('Press Enter to describe it, or type QUIT: ').strip().upper() != 'QUIT':
+        diagnose(page, path)
 
 
 def setup(page, row, path):
@@ -379,6 +417,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('csv', type=Path)
     ap.add_argument('--setup', action='store_true', help='Calibrate the full module table once, manually')
+    ap.add_argument('--describe', action='store_true', help='Open one controller and report what is on screen')
+    ap.add_argument('--account-type', help='Login dropdown choice: an exact option label, or a position such as 2')
     ap.add_argument('--profile', type=Path, default=Path('biu-profile.json'))
     ap.add_argument('--out', type=Path, default=Path('biu-results'))
     ap.add_argument('--only', help='One signal ID')
@@ -401,13 +441,14 @@ def main():
         ap.error(f"No matching controller ID {args.only!r} in the exported worklist. "
                  f"Available IDs: {available}")
     from playwright.sync_api import sync_playwright
+    manual = args.setup or args.describe
     profile = None
-    if not args.setup:
+    if not manual:
         profile = json.loads(args.profile.read_text(encoding='utf-8'))
         if profile.get('schema') != SCHEMA:
             raise ValueError('Unsupported profile; run --setup')
-    username = input('Username (kept in memory): ') if not args.setup else ''
-    password = getpass('Password (hidden, never saved): ') if not args.setup else ''
+    username = '' if manual else input('Username (kept in memory): ')
+    password = '' if manual else getpass('Password (hidden, never saved): ')
     args.out.mkdir(parents=True, exist_ok=True)
     run = args.out / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     run.mkdir()
@@ -419,6 +460,9 @@ def main():
                 context = browser.new_context(accept_downloads=False)
                 page = context.new_page()
                 page.set_default_timeout(15000)
+                if args.describe:
+                    describe(page, row, args.profile.with_name('biu-diagnostic.json'))
+                    return 0
                 if args.setup:
                     setup(page, row, args.profile)
                     return 0
@@ -426,7 +470,7 @@ def main():
                               checked_at=datetime.now(timezone.utc).isoformat(), evidence=[], reason='')
                 login_failed = False
                 try:
-                    navigate(page, row['maxtime_url'], username, password)
+                    navigate(page, row['maxtime_url'], username, password, args.account_type)
                     if origin(page.url) != origin(row['maxtime_url']):
                         raise RuntimeError('Controller redirected to a different origin')
                     evidence = inspect_modules(page, profile)
