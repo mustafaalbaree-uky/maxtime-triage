@@ -74,6 +74,13 @@
   .why.w-box { background: #e8f0fe; color: var(--accent); }
   .why.w-unclear { background: #fff3cd; color: var(--warn); }
   .why.w-noip { background: #eeeeef; color: var(--muted); }
+  .step.loud { border-left: 4px solid var(--bad); }
+  .bad { color: var(--bad); }
+  tr.unconfirmed td { background: #fff5f4; }
+  .flag { background: var(--bad); color: #fff; border-radius: 6px; padding: 1px 7px;
+    font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .ev { font-size: 11.5px; color: var(--muted); }
+  .ev pre { font-size: 11.5px; margin: 4px 0 0; white-space: pre-wrap; }
   .res { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
   .res button { padding: 3px 9px; font-size: 12.5px; border-radius: 6px; }
   .res button.on-yes { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -119,7 +126,7 @@
   <h1>MaxTime Box Triage</h1>
   <div class="sub">Clickbox configuration coverage, computed locally, nothing uploaded</div>
   <div class="spacer"></div>
-  <span class="sub">box.html 2026-09-09.3</span>
+  <span class="sub">box.html 2026-09-09.4</span>
   <a href="index.html">Timing triage</a>
   <button id="btnDemo">Load demo data</button>
   <button id="btnClear">Clear saved data</button>
@@ -649,21 +656,20 @@ function automationProposals(payload, check, found) {
   }
   return payload.results.map(r => {
     const id = S(r.id), e = check.find(e => S(e.id) === id), f = found[id] || {};
+    const readable = Array.isArray(r.evidence) && r.evidence.length >= 2 &&
+      r.evidence.every(row => Array.isArray(row) && row.every(c => typeof c === "string"));
     let skip = "";
     if (counts.get(id) !== 1) skip = "Duplicate ID in results";
     else if (!e) skip = "Not in the current check list";
     else if (S(e.url) !== S(r.maxtime_url)) skip = "Controller URL differs from this worklist";
-    else if (f.biu || f.saved) skip = "Already has a manual or imported answer";
-    else if (!["yes", "no"].includes(r.biu)) skip = "Needs manual review";
-    else if (!Array.isArray(r.evidence) || r.evidence.length < 2 ||
-      !r.evidence.every(row => Array.isArray(row) && row.every(c => typeof c === "string")))
-      skip = "No readable module evidence";
-    const readable = Array.isArray(r.evidence) && r.evidence.length >= 2 &&
-      r.evidence.every(row => Array.isArray(row) && row.every(c => typeof c === "string"));
-    let kind = "blocked";                       // Nothing can be decided from this row.
-    if (skip === "Already has a manual or imported answer") kind = "answered";
-    else if (!skip) kind = "ready";             // The script proposed an answer.
-    else if (skip === "Needs manual review" && readable) kind = "open";
+    else if (f.saved || (f.biu && !f.unconfirmed)) skip = "Already answered and confirmed";
+    // ready: the script proposed an answer. open: it read a table but the rule
+    // did not cover it. failed: it never got a readable table, which is a
+    // result in its own right and belongs on the row rather than in a count.
+    let kind = "blocked";
+    if (!skip) kind = ["yes", "no"].includes(r.biu) ? (readable ? "ready" : "failed")
+      : readable ? "open" : "failed";
+    else if (skip === "Already answered and confirmed") kind = "confirmed";
     return { id, biu: r.biu, reason: S(r.reason), checked_at: S(r.checked_at),
       evidence: Array.isArray(r.evidence) ? r.evidence : [], skip, kind };
   });
@@ -674,10 +680,19 @@ function newestRun(names) {
   return runs.length ? runs[runs.length - 1] : "";
 }
 
+function stillToRun(check, found) {
+  return check.filter(e => {
+    const f = found[S(e.id)] || {};
+    // A failed check carries no answer and is what a re-run is for. A row the
+    // rule could not cover needs your eyes, not another visit.
+    return S(e.url) && !f.biu && !f.saved && (!f.unconfirmed || f.failed);
+  });
+}
+
 function boxesToDownload(check, found) {
   return check.filter(e => {
     const f = found[S(e.id)] || {};
-    return f.biu === "yes" && !f.saved && S(e.box_url);
+    return f.biu === "yes" && !f.unconfirmed && !f.saved && S(e.box_url);
   });
 }
 
@@ -697,23 +712,35 @@ let state = {
   masterMeta: store.get("masterMeta", null),
   listing: store.get("listing", null),
   listingLabel: store.get("listingLabel", ""),
-  found: store.get("found", {}),   // signal id -> {biu:"yes"|"no", saved, note}
+  found: store.get("found", {}),   // signal id -> {biu:"yes"|"no", saved, note,
+                                   // unconfirmed, failed, evidence, reason, run}
+  lastImport: store.get("lastImport", null),
   tab: store.get("tab", "check"),
   filter: "",
   hideDone: store.get("hideDone", false),
 };
 let result = null, columns = null;
-let pendingAutomation = null, automationChoice = {};
-
-function startReview(payload) {
-  automationProposals(payload, result.check, state.found);   // Throws on a bad file.
-  pendingAutomation = payload;
-  automationChoice = {};
-  for (const p of automationProposals(payload, result.check, state.found))
-    if (p.kind === "ready") automationChoice[p.id] = p.biu;
+/* An imported run lands on the rows themselves, flagged until confirmed.
+   Nothing a run reported is dropped on the floor: what cannot go on a row is
+   listed in a banner that stays until it is dismissed. */
+function importRun(payload, label) {
+  const proposals = automationProposals(payload, result.check, state.found);
+  const count = k => proposals.filter(p => p.kind === k).length;
+  for (const p of proposals) {
+    if (!["ready", "open", "failed"].includes(p.kind)) continue;
+    const cur = state.found[p.id] || {};
+    state.found[p.id] = { ...cur, saved: false, unconfirmed: true,
+      biu: p.kind === "ready" ? p.biu : null,
+      failed: p.kind === "failed", evidence: p.evidence,
+      reason: p.reason, checked_at: p.checked_at, run: label };
+  }
+  state.lastImport = { run: label, at: new Date().toISOString(),
+    ready: count("ready"), open: count("open"), failed: count("failed"),
+    confirmed: count("confirmed"),
+    blocked: proposals.filter(p => p.kind === "blocked").map(p => ({ id: p.id, skip: p.skip })) };
+  store.set("lastImport", state.lastImport);
+  saveFound(); refresh();
 }
-
-function endReview() { pendingAutomation = null; automationChoice = {}; loadedRun = ""; }
 let lookupId = "";
 
 function saveFound() { store.set("found", state.found); }
@@ -722,7 +749,7 @@ function saveFound() { store.set("found", state.found); }
 /* The browser will not hand a page a folder without a click, so this is a
    button rather than something that happens on its own. The chosen folder is
    remembered; the permission to read it is asked for again each session. */
-let resultsDir = null, loadedRun = "";
+let resultsDir = null;
 
 function folderHandle(mode, value) {
   return new Promise((ok, no) => {
@@ -766,17 +793,19 @@ async function loadNewestRun() {
   try { file = await (await dir.getFileHandle("results.json")).getFile(); }
   catch (e) { toast("No results.json in " + label); return; }
   try {
-    startReview(JSON.parse(await file.text()));
-    loadedRun = label;
+    importRun(JSON.parse(await file.text()), label);
   } catch (e) { toast(S(e.message) || "Could not read that run"); return; }
-  renderPanel();
 }
 function foundOf(id) { return state.found[id] || null; }
 function setFound(id, patch) {
   const cur = state.found[id] || {};
   const next = { ...cur, ...patch };
-  if (next.biu == null) delete next.evidence;  // A cleared answer keeps no evidence.
-  if (next.biu == null && !next.saved && !S(next.note)) delete state.found[id];
+  if (next.biu == null && !next.unconfirmed) {
+    delete next.evidence; delete next.reason; delete next.checked_at;
+    delete next.run; delete next.failed;
+  }
+  if (next.biu == null && !next.saved && !S(next.note) && !next.unconfirmed)
+    delete state.found[id];
   else state.found[id] = next;
   saveFound(); refresh();
 }
@@ -906,9 +935,10 @@ function wireInputs() {
     if (!confirm("Forget the loaded sheets, the clickbox listing, and every "
       + "field result recorded here?")) return;
     for (const k of ["links", "master", "masterMeta", "listing", "listingLabel",
-      "found", "tab", "hideDone"]) store.del(k);
+      "found", "tab", "hideDone", "lastImport"]) store.del(k);
     state = { links: null, master: null, masterMeta: null, listing: null,
-      listingLabel: "", found: {}, tab: "check", filter: "", hideDone: false };
+      listingLabel: "", found: {}, lastImport: null, tab: "check",
+      filter: "", hideDone: false };
     refresh(); toast("Cleared");
   };
   document.getElementById("btnDemo").onclick = loadDemo;
@@ -940,12 +970,14 @@ function refresh() {
 
 function fieldDone(e) {
   const f = foundOf(S(e.id));
-  return !!(f && (f.biu === "no" || (f.biu === "yes" && f.saved)));
+  return !!(f && !f.unconfirmed && (f.biu === "no" || (f.biu === "yes" && f.saved)));
 }
 
 function renderSummary() {
   const r = result;
   const open = r.check.filter(e => !fieldDone(e)).length;
+  const flag = k => r.check.filter(e => (foundOf(S(e.id)) || {})[k]).length;
+  const waiting = flag("unconfirmed"), failed = flag("failed");
   const stats = [
     ["check", open, "need a controller check", open ? "n-bad" : "n-ok"],
     ["have", r.have.length, "in SharePoint already", "n-ok"],
@@ -1013,6 +1045,8 @@ function viewCheck(r) {
   let list = r.check.filter(matchesFilter);
   if (state.hideDone) list = list.filter(e => !fieldDone(e));
   const open = r.check.filter(e => !fieldDone(e)).length;
+  const flag = k => r.check.filter(e => (foundOf(S(e.id)) || {})[k]).length;
+  const waiting = flag("unconfirmed"), failed = flag("failed");
   const rows = list.map(e => {
     const f = foundOf(S(e.id)) || {};
     const done = fieldDone(e);
@@ -1021,7 +1055,7 @@ function viewCheck(r) {
       : `<span class="why w-noip">no IP</span>`;
     const bx = e.box_url && f.biu === "yes"
       ? `<br><a href="${h(e.box_url)}" target="_blank" rel="noopener">:57150</a>` : "";
-    return `<tr class="${done ? "settled" : ""}" data-id="${h(e.id)}">
+    return `<tr class="${done ? "settled" : ""}${f.unconfirmed ? " unconfirmed" : ""}" data-id="${h(e.id)}">
       <td><span class="chip">${h(e.id)}</span><br><span style="font-size:11.5px;color:#5b6b7b">row ${e.row}</span></td>
       <td>${h(e.county)}</td>
       <td>${h(intersection(e))}</td>
@@ -1038,12 +1072,18 @@ function viewCheck(r) {
         ${f.biu === "yes" ? `<label style="font-size:12.5px;display:block;margin-top:4px">
           <input type="checkbox" class="savedbox" data-id="${h(e.id)}" ${f.saved ? "checked" : ""}>
           exported and saved to SharePoint</label>` : ""}
+        ${f.unconfirmed ? `<div style="margin-top:4px">
+          <span class="flag">${f.failed ? "check failed" : f.biu ? "unconfirmed" : "no answer"}</span>
+          ${f.biu ? `<button class="rbtn okbtn" data-id="${h(e.id)}">confirm</button>` : ""}
+        </div>` : ""}
         ${f.biu ? `<input class="notebox notein" data-id="${h(e.id)}" placeholder="note"
           value="${h(f.note || "")}">` : ""}
-        ${Array.isArray(f.evidence) && f.evidence.length ? `<details><summary style="cursor:pointer;
-          color:#5b6b7b;font-size:12.5px">module table</summary><pre style="font-size:11.5px;
-          margin:4px 0 0;white-space:pre-wrap">${h(f.evidence.map(row =>
-            Array.isArray(row) ? row.join(" | ") : "").join("\n"))}</pre></details>` : ""}
+      </td>
+      <td class="ev">${f.reason || (Array.isArray(f.evidence) && f.evidence.length) ? `
+        ${h(f.reason || "")}<br><small>${h(f.run || "")}</small>
+        ${Array.isArray(f.evidence) && f.evidence.length ? `<details><summary
+          style="cursor:pointer">module table</summary><pre>${h(f.evidence.map(row =>
+            Array.isArray(row) ? row.join(" | ") : "").join("\n"))}</pre></details>` : ""}` : ""}
       </td></tr>`;
   }).join("");
 
@@ -1078,45 +1118,31 @@ function viewCheck(r) {
     <label class="rbtn">Review script results <input id="autoResults" type="file" accept=".json" hidden></label>
     <span class="note">${open} of ${r.check.length} still open${r.noip.length
       ? `, ${r.noip.length} with no IP in the links sheet` : ""}</span>
+    ${waiting ? `<span class="flag">${waiting} to confirm${
+      failed ? ", " + failed + " the script could not read" : ""}</span>` : ""}
   </div>
-  ${automationPreview()}
+  ${importReport()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
     <th>Detection</th><th>Box / Verified</th><th>Why</th><th>Open</th>
-    <th style="width:250px">What I found</th></tr></thead>
+    <th style="width:250px">What I found</th>
+    <th style="width:220px">Script evidence</th></tr></thead>
     <tbody>${rows}</tbody></table>`
     : `<div class="empty">Nothing in the check list.</div>`}`;
 }
 
-function automationPreview() {
-  if (!pendingAutomation) return "";
-  const proposals = automationProposals(pendingAutomation, result.check, state.found);
-  const answered = proposals.filter(p => p.kind === "answered").length;
-  const listed = proposals.filter(p => p.kind !== "answered");
-  const chosen = listed.filter(p => automationChoice[p.id]).length;
-  const said = b => b === "yes" ? "BIU, box" : b === "no" ? "no BIU" : "needs review";
-  const pick = (p, biu, label) => `<button class="rbtn ${automationChoice[p.id] === biu
-    ? (biu === "yes" ? "on-yes" : biu === "no" ? "on-no" : "on") : ""}"
-    data-auto="${h(p.id)}" data-biu="${biu}">${label}</button>`;
-  return `<div class="step"><b>Review automated IO module checks${loadedRun ? " from " + h(loadedRun) : ""}</b>
-    <p>Each row is yours to set. The script's answer is filled in already; change it or leave a row
-    open. Compare the module evidence and the script's local screenshots with what you see.</p>
-    ${answered ? `<p>${answered} already answered ${answered === 1 ? "row is" : "rows are"}
-      not listed. Change those on the check list itself.</p>` : ""}
-    <table><thead><tr><th>ID</th><th>The script said</th><th>Evidence / reason</th>
-    <th style="width:210px">Record</th></tr></thead>
-    <tbody>${listed.map(p => `<tr><td>${h(p.id)}</td>
-      <td>${h(said(p.biu))}</td>
-      <td>${h(p.reason)}<br><small>${h(p.checked_at)}</small>
-      ${p.evidence.length ? `<details><summary>Module table</summary><pre>${
-        h(p.evidence.map(row => Array.isArray(row) ? row.join(" | ") : "").join("\n"))}</pre></details>` : ""}</td>
-      <td>${p.kind === "blocked" ? h(p.skip) : `<div class="res">
-        ${pick(p, "yes", "BIU, box")}${pick(p, "no", "no BIU")}${pick(p, "", "leave open")}
-      </div>`}</td></tr>`).join("")}</tbody></table>
-    <button id="applyAutomation" class="primary" ${chosen ? "" : "disabled"}>Apply ${chosen} ${
-      chosen === 1 ? "answer" : "answers"}</button>
-    <button id="cancelAutomation">Dismiss</button>
-    <p>BIU answers reveal the :57150 link. Download the box configuration and mark it saved yourself.</p>
-  </div>`;
+function importReport() {
+  const i = state.lastImport;
+  if (!i) return "";
+  const waiting = i.ready + i.open + i.failed;
+  const bad = i.failed || i.blocked.length;
+  return `<div class="step ${bad ? "loud" : ""}">
+    <b>Run ${h(i.run)}</b>
+    <p>${waiting} ${waiting === 1 ? "row is" : "rows are"} flagged for confirmation:
+    ${i.ready} with an answer, ${i.open} the rule did not cover, ${i.failed} the script could not read.
+    ${i.confirmed ? i.confirmed + " already confirmed, left alone." : ""}</p>
+    ${i.blocked.length ? `<p class="bad"><b>${i.blocked.length} could not be put on a row:</b></p>
+      <ul>${i.blocked.map(b => `<li>${h(b.id)}: ${h(b.skip)}</li>`).join("")}</ul>` : ""}
+    <button id="dismissImport">Dismiss</button></div>`;
 }
 
 /* --- already in SharePoint --- */
@@ -1139,7 +1165,7 @@ function viewHave(r) {
       ${r.label.length} of them are not yet recorded in the sheet; the sheet
       columns tab fills those in.</span>
   </div>
-  ${automationPreview()}
+  ${importReport()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
     <th>Box / Verified</th><th>Standing</th><th>File in the folder</th></tr></thead>
     <tbody>${rows}</tbody></table>`
@@ -1319,10 +1345,17 @@ function wirePanel() {
   if (hd) hd.onchange = () => { state.hideDone = hd.checked;
     store.set("hideDone", state.hideDone); renderPanel(); };
 
-  for (const b of document.querySelectorAll(".rbtn"))
+  for (const b of document.querySelectorAll(".rbtn[data-biu]"))
     b.onclick = () => setFound(b.dataset.id,
       { biu: b.dataset.biu === "clear" ? null : b.dataset.biu,
+        unconfirmed: false, failed: false,   // Answering a row is confirming it.
         saved: b.dataset.biu === "clear" ? false : undefined });
+  for (const b of document.querySelectorAll(".okbtn"))
+    b.onclick = () => setFound(b.dataset.id, { unconfirmed: false, failed: false });
+  const dismiss = document.getElementById("dismissImport");
+  if (dismiss) dismiss.onclick = () => {
+    state.lastImport = null; store.del("lastImport"); renderPanel();
+  };
   for (const c of document.querySelectorAll(".savedbox"))
     c.onchange = () => setFound(c.dataset.id, { saved: c.checked });
   for (const n of document.querySelectorAll(".notein"))
@@ -1345,9 +1378,8 @@ function wirePanel() {
         e.url, e.box_url])));
   const autoCsv = document.getElementById("btnAutoCsv");
   if (autoCsv) autoCsv.onclick = () => downloadCSV("biu_worklist.csv",
-    [["id", "maxtime_url", "intersection"]].concat(result.check
-      .filter(e => e.url && !(foundOf(S(e.id)) || {}).biu && !(foundOf(S(e.id)) || {}).saved)
-      .map(e => [e.id, e.url, intersection(e)])));
+    [["id", "maxtime_url", "intersection"]].concat(
+      stillToRun(result.check, state.found).map(e => [e.id, e.url, intersection(e)])));
   const newest = document.getElementById("btnNewestRun");
   if (newest) newest.onclick = async () => {
     try {
@@ -1365,38 +1397,9 @@ function wirePanel() {
     try {
       const file = autoInput.files[0];
       if (!file) return;
-      startReview(JSON.parse(await file.text()));
-      loadedRun = S(file.name);
-      renderPanel();
+      importRun(JSON.parse(await file.text()), S(file.name));
     } catch (e) { toast("Could not import: " + e.message); }
   };
-  for (const el of document.querySelectorAll("#panel [data-auto]"))
-    el.onclick = () => {
-      if (el.dataset.biu) automationChoice[el.dataset.auto] = el.dataset.biu;
-      else delete automationChoice[el.dataset.auto];
-      renderPanel();
-    };
-  const apply = document.getElementById("applyAutomation");
-  if (apply) apply.onclick = () => {
-    const proposals = automationProposals(pendingAutomation, result.check, state.found);
-    let n = 0;
-    for (const p of proposals) {
-      const choice = automationChoice[p.id];
-      if (p.kind === "answered" || p.kind === "blocked" || !choice) continue;
-      const cur = state.found[p.id] || {};
-      // Only a proposal that was overruled is worth recording as a change.
-      const overruled = (p.biu === "yes" || p.biu === "no") && choice !== p.biu;
-      const note = "Reviewed script check " + p.checked_at + ": " + p.reason
-        + (overruled ? "; recorded as " + choice + " instead" : "");
-      state.found[p.id] = { ...cur, biu: choice, saved: false, evidence: p.evidence,
-        note: [cur.note, note].filter(Boolean).join("; ") };
-      n++;
-    }
-    endReview();
-    saveFound(); refresh(); toast(n + " answers recorded; box downloads remain manual");
-  };
-  const cancel = document.getElementById("cancelAutomation");
-  if (cancel) cancel.onclick = () => { endReview(); renderPanel(); };
   const cid = document.getElementById("btnCopyIds");
   if (cid) cid.onclick = () => copyText(
     result.check.map(e => e.id).join("\n") + "\n", result.check.length + " IDs");

@@ -220,54 +220,66 @@ class BrowserTests(unittest.TestCase):
         }""", [{'name': '20260908T101010000000Z', 'text': run('no', [])},
                {'name': '20260909T174050009501Z', 'text': run('yes', [['2', 'TS2 DR1 BIU']])}])
         page.evaluate('loadNewestRun()')
-        self.assertEqual(page.evaluate('loadedRun'), '20260909T174050009501Z')
+        self.assertEqual(page.evaluate('state.lastImport.run'), '20260909T174050009501Z')
         self.assertIn('20260909T174050009501Z', page.locator('#panel').inner_text())
-        page.locator('#applyAutomation').click()
-        self.assertEqual(page.evaluate('state.found')[work[0]['id']]['biu'], 'yes')
-        self.assertEqual(page.evaluate('loadedRun'), '')
+        found = page.evaluate('state.found')[work[0]['id']]
+        self.assertEqual((found['biu'], found['unconfirmed']), ('yes', True))
         ctx.close()
 
-    def test_each_reviewed_row_is_a_decision_that_can_be_changed(self):
+    def test_an_imported_run_lands_on_the_rows_and_flags_every_outcome(self):
         ctx = self.browser.new_context()
         page = ctx.new_page()
         page.goto((Path(__file__).resolve().parents[1] / 'webapp/box.html').as_uri())
         page.evaluate('loadDemo()')
         work = page.evaluate('result.check.map(e => ({id:String(e.id),maxtime_url:e.url}))')
         evidence = [['Module', 'Type'], ['1', 'SIU']]
+        results = [
+            dict(**work[0], biu='yes', evidence=evidence + [['2', 'TS2 DR1 BIU']],
+                 reason='Module 2: TS2 DR1 BIU', checked_at='2026-09-09T12:00:00Z'),
+            dict(**work[1], biu='unknown', evidence=evidence,
+                 reason='Module type not seen during calibration: ts2 siu', checked_at='2026-09-09T12:00:01Z'),
+            dict(**work[2], biu='unknown', evidence=[],
+                 reason='TimeoutError: login, navigation or read failed', checked_at='2026-09-09T12:00:02Z'),
+            dict(id='9999', maxtime_url='http://198.51.100.1/maxtime/', biu='no', evidence=evidence,
+                 reason='r', checked_at='2026-09-09T12:00:03Z')]
+        page.evaluate('(p) => importRun(p, "run-one")',
+                      dict(schema=SCHEMA, results=results))
 
-        def review(answers):
-            page.evaluate('(p) => { startReview(p); renderPanel(); }', dict(schema=SCHEMA, results=[
-                dict(**w, biu=b, evidence=evidence, reason='r', checked_at='2026-09-09T12:00:00Z')
-                for w, b in zip(work, answers)]))
+        found = page.evaluate('state.found')
+        self.assertEqual([found[w['id']]['unconfirmed'] for w in work], [True, True, True])
+        self.assertEqual(found[work[0]['id']]['biu'], 'yes')
+        self.assertIsNone(found[work[1]['id']]['biu'])   # The rule did not cover it.
+        self.assertTrue(found[work[2]['id']]['failed'])  # Nothing was read at all.
 
-        page.evaluate('(id) => setFound(id, {biu: "no"})', work[0]['id'])
-        review(('no', 'no', 'unknown'))
         panel = page.locator('#panel')
-        self.assertIn('1 already answered row is not listed', panel.inner_text())
-        self.assertNotIn(work[0]['id'], panel.locator('.step table tbody').first.inner_text())
-        # The script's answer is filled in; an unknown starts blank.
-        self.assertEqual(page.evaluate('automationChoice'), {work[1]['id']: 'no'})
+        self.assertIn('3 rows are flagged for confirmation', panel.inner_text())
+        self.assertIn('9999: Not in the current check list', panel.inner_text())  # Never dropped quietly.
+        self.assertIn('3 to confirm, 1 the script could not read', panel.inner_text())
+        row = panel.locator(f'tr[data-id="{work[0]["id"]}"]')
+        self.assertIn('unconfirmed', row.get_attribute('class'))
+        self.assertIn('2 | TS2 DR1 BIU', row.locator('.ev pre').text_content())
+        self.assertIn('login, navigation or read failed',
+                      panel.locator(f'tr[data-id="{work[2]["id"]}"] .ev').inner_text())
 
-        panel.locator(f'[data-auto="{work[1]["id"]}"][data-biu="yes"]').click()
-        panel.locator(f'[data-auto="{work[2]["id"]}"][data-biu="no"]').click()
-        panel.locator(f'[data-auto="{work[2]["id"]}"][data-biu=""]').click()
-        self.assertEqual(page.evaluate('automationChoice'), {work[1]['id']: 'yes'})
-        page.locator('#applyAutomation').click()
-
-        found = page.evaluate('state.found')
-        self.assertEqual(found[work[1]['id']]['biu'], 'yes')
-        self.assertIn('recorded as yes instead', found[work[1]['id']]['note'])
-        self.assertNotIn(work[2]['id'], found)  # Left open records nothing.
-        self.assertEqual(found[work[0]['id']]['biu'], 'no')  # The answer it already had.
-
-        # An unknown left open stays decidable on the next run.
-        review(('no', 'no', 'unknown'))
-        self.assertIn('2 already answered rows are not listed', panel.inner_text())
-        panel.locator(f'[data-auto="{work[2]["id"]}"][data-biu="no"]').click()
-        page.locator('#applyAutomation').click()
-        found = page.evaluate('state.found')
-        self.assertEqual(found[work[2]['id']]['biu'], 'no')
-        self.assertNotIn('instead', found[work[2]['id']]['note'])
+        # An unconfirmed yes owes no download and is not treated as done.
+        self.assertEqual(page.evaluate('boxesToDownload(result.check, state.found).length'), 0)
+        row.locator('.okbtn').click()
+        self.assertFalse(page.evaluate('state.found')[work[0]['id']]['unconfirmed'])
+        self.assertEqual(page.evaluate('boxesToDownload(result.check, state.found).map(e => String(e.id))'),
+                         [work[0]['id']])
+        # Answering a flagged row is confirming it.
+        panel.locator(f'tr[data-id="{work[1]["id"]}"] [data-biu="no"]').click()
+        self.assertEqual(page.evaluate('state.found')[work[1]['id']],
+                         {**page.evaluate('state.found')[work[1]['id']], 'biu': 'no', 'unconfirmed': False})
+        # A confirmed answer is left alone by the next run; an unconfirmed one is replaced.
+        page.evaluate('(p) => importRun(p, "run-two")', dict(schema=SCHEMA, results=[
+            dict(**work[0], biu='no', evidence=evidence, reason='changed', checked_at='2026-09-09T13:00:00Z'),
+            dict(**work[2], biu='no', evidence=evidence, reason='read this time', checked_at='2026-09-09T13:00:01Z')]))
+        after = page.evaluate('state.found')
+        self.assertEqual(after[work[0]['id']]['biu'], 'yes')
+        self.assertEqual(after[work[2]['id']]['biu'], 'no')
+        self.assertFalse(after[work[2]['id']]['failed'])
+        self.assertIn('1 already confirmed', panel.inner_text())
         ctx.close()
 
     def test_source_lookup_and_missing_folder_ids(self):
@@ -312,24 +324,22 @@ class BrowserTests(unittest.TestCase):
             f = Path(d) / 'results.json'
             f.write_text(json.dumps(dict(schema=SCHEMA, results=results)))
             page.locator('#autoResults').set_input_files(str(f))
-            page.locator('#applyAutomation').wait_for()
-            before = page.evaluate('JSON.stringify(state.found)')
-            self.assertNotIn(work[1]['id'], json.loads(before))
-            page.locator('#applyAutomation').click()
+            page.locator('#dismissImport').wait_for()
             found = page.evaluate('state.found')
             self.assertEqual(found[work[0]['id']]['note'], 'manual note')
-            self.assertEqual(found[work[1]['id']]['biu'], 'yes')
-            self.assertFalse(found[work[1]['id']]['saved'])
-            self.assertNotIn(work[2]['id'], found)
+            self.assertEqual(found[work[0]['id']]['biu'], 'yes')  # Confirmed, so left alone.
+            self.assertNotIn('unconfirmed', found[work[0]['id']])
+            self.assertTrue(found[work[1]['id']]['unconfirmed'])
             self.assertEqual(found[work[1]['id']]['evidence'][2], ['2', 'TS2 DR1 BIU'])
             page.reload()
             self.assertEqual(page.evaluate('state.found'), found)
-            # The module table stays on the row that the answer came from.
+            # The module table stays on the row it came from.
             row = page.locator(f'#panel tr[data-id="{work[1]["id"]}"]')
-            row.locator('summary', has_text='module table').click()
-            self.assertIn('2 | TS2 DR1 BIU', row.locator('pre').inner_text())
-            # Every yes still owing a download, whether answered by hand or imported.
+            self.assertIn('2 | TS2 DR1 BIU', row.locator('.ev pre').text_content())
+            # A yes owes a download only once it is confirmed.
             listed = 'boxesToDownload(result.check, state.found).map(e => String(e.id))'
+            self.assertEqual(page.evaluate(listed), [work[0]['id']])
+            row.locator('.okbtn').click()
             self.assertEqual(sorted(page.evaluate(listed)), sorted([work[0]['id'], work[1]['id']]))
             page.evaluate('(id) => setFound(id, {saved: true})', work[1]['id'])
             self.assertEqual(page.evaluate(listed), [work[0]['id']])
@@ -339,9 +349,9 @@ class BrowserTests(unittest.TestCase):
             text = Path(dl.value.path()).read_text()
             self.assertNotIn(work[0]['id'], text)
             self.assertNotIn(work[1]['id'], text)
-            self.assertIn(work[2]['id'], text)
-        page.evaluate('(id) => setFound(id, {biu: null})', work[1]['id'])  # Clearing takes the evidence with it.
-        self.assertNotIn('evidence', page.evaluate('state.found')[work[1]['id']] or {})
+            self.assertNotIn(work[2]['id'], text)  # Unknown, waiting on you, not re-run.
+        page.evaluate('(id) => setFound(id, {biu: null, unconfirmed: false})', work[1]['id'])
+        self.assertNotIn(work[1]['id'], page.evaluate('state.found'))  # Clearing takes the whole record.
         self.assertEqual(network, [])
         self.assertEqual(errors, [])
         ctx.close()

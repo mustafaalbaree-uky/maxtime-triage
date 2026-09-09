@@ -61,17 +61,27 @@ const run = (rows, found={}) => automationProposals({schema:'maxtime-biu-v1',res
 assert.equal(run([row])[0].skip, '');
 assert.ok(run([row],{'4821':{biu:'yes'}})[0].skip);
 assert.ok(run([row],{'4821':{saved:true}})[0].skip);
-assert.ok(run([{...row,biu:'unknown'}])[0].skip);
+assert.equal(run([{...row,biu:'unknown'}])[0].skip, '');
 assert.ok(run([{...row,id:'4999'}])[0].skip);
 assert.ok(run([{...row,maxtime_url:check[1].url}])[0].skip);
-assert.ok(run([{...row,evidence:[]}])[0].skip);
+assert.equal(run([{...row,evidence:[]}])[0].skip, '');
 assert.ok(run([row,row]).every(r => r.skip));
 assert.equal(run([row])[0].kind, 'ready');
-assert.equal(run([row],{'4821':{biu:'yes'}})[0].kind, 'answered');
+assert.equal(run([row],{'4821':{biu:'yes'}})[0].kind, 'confirmed');
+assert.equal(run([row],{'4821':{biu:'yes',unconfirmed:true}})[0].kind, 'ready');
 assert.equal(run([{...row,biu:'unknown'}])[0].kind, 'open');
-assert.equal(run([{...row,biu:'unknown',evidence:[]}])[0].kind, 'blocked');
+assert.equal(run([{...row,evidence:[]}])[0].kind, 'failed');
+assert.equal(run([{...row,biu:'unknown',evidence:[]}])[0].kind, 'failed');
 assert.equal(run([{...row,id:'4999'}])[0].kind, 'blocked');
 assert.throws(() => automationProposals({},check,{}));
+const again = f => stillToRun(check, f).map(e => e.id);
+assert.deepEqual(again({}), ['4821','4822']);
+assert.deepEqual(again({'4821':{biu:'no'}}), ['4822']);
+assert.deepEqual(again({'4821':{biu:'no',unconfirmed:true}}), ['4822']);
+assert.deepEqual(again({'4821':{saved:true}}), ['4822']);
+assert.deepEqual(again({'4821':{unconfirmed:true}}), ['4822']);          // Unknown, waiting on you.
+assert.deepEqual(again({'4821':{unconfirmed:true,failed:true}}), ['4821','4822']);  // Retry this one.
+assert.deepEqual(boxesToDownload(check,{'4821':{biu:'yes'}}).map(e=>e.id), []);
 const links = {'4821': {row:2,main:'MAIN',side:'OAK',ip:'192.0.2.1',url:'http://192.0.2.1'}};
 const master = [{id:'4821',row:2,county:'ALDER',s1:'MAIN',s2:'OAK'}];
 const audit = analyzeBox(links,master,['4821_MAIN_OAK.cbx','4822_OTHER.cbx','4822_OTHER_copy.cbx','export_20260908.cbx','4823_sheet.xlsx']);

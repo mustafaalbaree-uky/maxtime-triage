@@ -153,42 +153,55 @@ independently prove the controller's physical intersection identity.
 
 ## Review and import
 
-In box.html, in the bar under the check list, click **Point at the results
-folder** and choose the `biu-results` folder itself, once. From then on that
-button reads **Newest script run** and loads the most recent run in it. The
-folder is remembered between sessions; permission to read it is asked for
-again each time you open the page, because a browser will not hand a page a
-folder without a click. **change folder** points it somewhere else, and
-**Review script results** still takes a single `results.json` by hand.
+Load a run with **Newest script run**, or **Review script results** for one
+`results.json` by hand. The rows are marked immediately; nothing is hidden
+behind a separate confirm step.
 
-The preview names the run it loaded. Every row is yours to set: the script's
-answer is filled in, and **BIU, box**, **no BIU** and **leave open** change it
-before anything is recorded. A row the script called `unknown` starts blank, so
-you can read its evidence and answer it there rather than going back to the
-controller. **Apply** records only the rows you left with an answer. Importing
-alone changes nothing.
+Every row a run touched is flagged red on the check list until you confirm it,
+and its **Script evidence** column holds the reason, the run it came from, and
+the module table the answer was read off. Three kinds of flag:
 
-Rows that already have an answer are not listed. Change those on the check list
-itself, where the same three buttons sit on the row. An answer you record
-against the script's own proposal is noted as such.
+- **unconfirmed** with an answer already set. Press **confirm** to accept it,
+  or press the other answer to overrule it. Either one clears the flag.
+- **no answer**: the script read a module table but the rule did not cover it,
+  usually a module type calibration has not seen. Read the evidence and press
+  **BIU, box** or **no BIU**.
+- **check failed**: the script never got a readable table. Login, navigation
+  or the read itself failed, and the reason says which. These carry no answer,
+  so the next exported worklist asks for them again.
 
-- `yes` acts like **BIU, box** and reveals the `:57150` link. Fetch and save the
-  box file manually, then mark it saved as before.
-- `no` acts like **no BIU**.
-- `unknown` stays open for a manual check.
-- Already recorded answers, settled rows, duplicate IDs and changed controller
-  URLs are skipped. To replace an earlier answer deliberately, clear it first.
+Nothing a run reported is dropped. Results that cannot go on a row at all, a
+duplicate ID, an ID missing from the check list, a controller URL that differs
+from the worklist, are listed by ID in a banner that stays until dismissed.
+The bar under the list carries the running count, `12 to confirm, 3 the script
+could not read`.
 
-Applied answers keep the module table they came from. It folds open on the
-row, under the answer buttons, so an imported answer can be checked against
-what the script actually read long after importing. Clearing an answer clears
-its evidence.
+Confirmed answers are left alone by later runs. An unconfirmed one is replaced
+by a newer run, so re-running a controller and importing again is safe.
 
-Once there is at least one `yes` with no saved file, the same bar offers
-**Copy the N boxes to download**: ID, intersection and the `:57150` address,
-for answers made by hand and imported ones alike.
+- `yes` reveals the `:57150` link once confirmed. Fetch and save the box file
+  manually, then mark it saved as before.
+- Nothing is owed a download until its answer is confirmed.
+- Already answered rows are skipped on import; change those on the row itself.
 
-The existing sheet-column copy buttons work with the accepted results.
+## Doing the rest without repeating yourself
+
+Import the run, confirm what you want to confirm, then click **Export
+automation worklist** again. That new CSV is what to run next, and it holds:
+
+- controllers never checked
+- controllers whose check **failed**, which is what a re-run is for
+
+It leaves out anything already answered, confirmed or not, and anything the
+script read but could not decide, since another visit would return the same
+unknown. Work through those on the page instead.
+
+A run stops early only after **three login failures in a row**, which is what a
+wrong password looks like. A single controller that refuses the login is
+recorded, said out loud, and the batch carries on. `--stop-after N` changes it.
+
+The account type is printed only when it changes, so a controller pointing at
+a different profile server is visible rather than buried.
 
 ## A few, then the rest
 

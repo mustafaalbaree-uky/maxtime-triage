@@ -251,7 +251,12 @@ def navigate(page, url, username, password, account_type=None, account_open=None
             pass
     if account_type:
         # Chosen before the fields are read, since it can redraw the form.
-        print('Account type:', choose_account_type(page, account_type, account_open))
+        chosen = choose_account_type(page, account_type, account_open)
+        # Printed only when it changes, so a controller pointing at a different
+        # profile server stands out instead of scrolling past with the rest.
+        if chosen != navigate.last_account_type:
+            print('Account type:', chosen)
+            navigate.last_account_type = chosen
     pw = page.locator('input[type=password]:visible')
     if pw.count():
         user = page.locator('input:visible:not([type=password]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio])')
@@ -271,6 +276,9 @@ def navigate(page, url, username, password, account_type=None, account_open=None
         page.goto(home, wait_until='domcontentloaded')
         for label in ('Controller', 'Advanced IO', 'Cabinet Configuration', 'IO Modules'):
             click_text(page, '^' + re.escape(label) + '$')
+
+
+navigate.last_account_type = ''
 
 
 def showing_io_modules(page, timeout=6000):
@@ -467,9 +475,11 @@ def main():
     group.add_argument('--all', action='store_true', help='Process the whole exported worklist')
     ap.add_argument('--browser', choices=['msedge', 'chrome', 'chromium'], default='msedge')
     ap.add_argument('--delay', type=float, default=3, help='Seconds between controllers')
+    ap.add_argument('--stop-after', type=int, default=3,
+                    help='Stop after this many login failures in a row (default: 3)')
     args = ap.parse_args()
-    if args.limit < 1 or args.delay < 0:
-        ap.error('limit must be positive and delay nonnegative')
+    if args.limit < 1 or args.delay < 0 or args.stop_after < 1:
+        ap.error('limit and stop-after must be positive and delay nonnegative')
     worklist = read_worklist(args.csv)
     rows = worklist
     if args.only:
@@ -493,6 +503,7 @@ def main():
     run = args.out / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     run.mkdir()
     results = []
+    refused = 0          # Consecutive login failures, not the total.
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False, **({} if args.browser == 'chromium' else {'channel': args.browser}))
         try:
@@ -534,9 +545,14 @@ def main():
                 temp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
                 temp.replace(run / 'results.json')
                 print(f"{i+1}/{len(rows)} {row['id']}: {record['biu']} — {record['reason']}")
-                if login_failed:
-                    print('Login did not complete. Stopping the batch; verify login before trying again.')
+                refused = refused + 1 if login_failed else 0
+                if refused >= args.stop_after:
+                    print(f'Login did not complete on {refused} controllers in a row. '
+                          'Stopping; verify the login before trying again.')
                     break
+                if login_failed:
+                    print('  Login did not complete here. Carrying on; this ID stays in the '
+                          'next worklist.')
                 if i + 1 < len(rows):
                     time.sleep(args.delay)
         finally:
