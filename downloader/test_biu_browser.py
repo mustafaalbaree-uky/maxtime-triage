@@ -193,6 +193,40 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(page.locator('#now').inner_text(), profile_server)
         ctx.close()
 
+    def test_the_newest_run_in_the_results_folder_is_the_one_loaded(self):
+        """The folder picker needs a click, so the handle itself is stood in for."""
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        page.goto((Path(__file__).resolve().parents[1] / 'webapp/box.html').as_uri())
+        page.evaluate('loadDemo()')
+        work = page.evaluate('result.check.map(e => ({id:String(e.id),maxtime_url:e.url}))')
+        evidence = [['Module', 'Type'], ['1', 'SIU']]
+
+        def run(biu, extra):
+            return json.dumps(dict(schema=SCHEMA, results=[dict(
+                id=work[0]['id'], maxtime_url=work[0]['maxtime_url'], biu=biu,
+                evidence=evidence + extra, reason='r', checked_at='2026-09-09T12:00:00Z')]))
+
+        self.assertEqual(page.evaluate("newestRun(['20260909T000000000000Z', 'notes', '20260908T235959000000Z'])"),
+                         '20260909T000000000000Z')
+        page.evaluate("""(runs) => {
+          const dirs = runs.map(r => ({ kind: 'directory', name: r.name,
+            getFileHandle: async n => { if (n !== 'results.json') throw new Error('missing');
+              return { getFile: async () => ({ text: async () => r.text }) }; } }));
+          useResultsFolder({ name: 'biu-results', kind: 'directory',
+            queryPermission: async () => 'granted',
+            entries: async function* () { for (const d of dirs) yield [d.name, d]; },
+            getDirectoryHandle: async n => dirs.find(d => d.name === n) });
+        }""", [{'name': '20260908T101010000000Z', 'text': run('no', [])},
+               {'name': '20260909T174050009501Z', 'text': run('yes', [['2', 'TS2 DR1 BIU']])}])
+        page.evaluate('loadNewestRun()')
+        self.assertEqual(page.evaluate('loadedRun'), '20260909T174050009501Z')
+        self.assertIn('20260909T174050009501Z', page.locator('#panel').inner_text())
+        page.locator('#applyAutomation').click()
+        self.assertEqual(page.evaluate('state.found')[work[0]['id']]['biu'], 'yes')
+        self.assertEqual(page.evaluate('loadedRun'), '')
+        ctx.close()
+
     def test_source_lookup_and_missing_folder_ids(self):
         ctx = self.browser.new_context()
         page = ctx.new_page()

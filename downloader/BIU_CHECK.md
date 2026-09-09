@@ -153,8 +153,15 @@ independently prove the controller's physical intersection identity.
 
 ## Review and import
 
-In box.html, click **Review script results** and select `results.json`. The
-preview shows evidence and any skipped rows. Click **I reviewed these — apply**
+In box.html, in the bar under the check list, click **Point at the results
+folder** and choose the `biu-results` folder itself, once. From then on that
+button reads **Newest script run** and loads the most recent run in it. The
+folder is remembered between sessions; permission to read it is asked for
+again each time you open the page, because a browser will not hand a page a
+folder without a click. **change folder** points it somewhere else, and
+**Review script results** still takes a single `results.json` by hand.
+
+The preview names the run it loaded, and shows evidence and any skipped rows. Click **I reviewed these — apply**
 to accept the eligible proposals. This is a deliberate review step; importing
 alone changes nothing.
 
@@ -164,6 +171,15 @@ alone changes nothing.
 - `unknown` stays open for a manual check.
 - Already recorded answers, settled rows, duplicate IDs and changed controller
   URLs are skipped. To replace an earlier answer deliberately, clear it first.
+
+Applied answers keep the module table they came from. It folds open on the
+row, under the answer buttons, so an imported answer can be checked against
+what the script actually read long after importing. Clearing an answer clears
+its evidence.
+
+Once there is at least one `yes` with no saved file, the same bar offers
+**Copy the N boxes to download**: ID, intersection and the `:57150` address,
+for answers made by hand and imported ones alike.
 
 The existing sheet-column copy buttons work with the accepted results.
 

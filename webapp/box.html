@@ -119,7 +119,7 @@
   <h1>MaxTime Box Triage</h1>
   <div class="sub">Clickbox configuration coverage, computed locally, nothing uploaded</div>
   <div class="spacer"></div>
-  <span class="sub">box.html 2026-09-09</span>
+  <span class="sub">box.html 2026-09-09.2</span>
   <a href="index.html">Timing triage</a>
   <button id="btnDemo">Load demo data</button>
   <button id="btnClear">Clear saved data</button>
@@ -663,6 +663,11 @@ function automationProposals(payload, check, found) {
   });
 }
 
+function newestRun(names) {
+  const runs = names.filter(n => /^\d{8}T\d{6,}Z$/.test(n)).sort();
+  return runs.length ? runs[runs.length - 1] : "";
+}
+
 function boxesToDownload(check, found) {
   return check.filter(e => {
     const f = found[S(e.id)] || {};
@@ -696,6 +701,62 @@ let pendingAutomation = null;
 let lookupId = "";
 
 function saveFound() { store.set("found", state.found); }
+
+/* ---------- the results folder ---------- */
+/* The browser will not hand a page a folder without a click, so this is a
+   button rather than something that happens on its own. The chosen folder is
+   remembered; the permission to read it is asked for again each session. */
+let resultsDir = null, loadedRun = "";
+
+function folderHandle(mode, value) {
+  return new Promise((ok, no) => {
+    const open = indexedDB.open("mtb-folder", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("h");
+    open.onerror = () => no(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const st = db.transaction("h", mode === "get" ? "readonly" : "readwrite").objectStore("h");
+      const req = mode === "get" ? st.get("dir") : st.put(value, "dir");
+      req.onsuccess = () => { ok(req.result); db.close(); };
+      req.onerror = () => { no(req.error); db.close(); };
+    };
+  });
+}
+
+function useResultsFolder(dir) { resultsDir = dir; renderPanel(); }
+
+async function pickResultsFolder() {
+  const dir = await window.showDirectoryPicker({ id: "biu-results", mode: "read" });
+  try { await folderHandle("set", dir); } catch (e) {}
+  useResultsFolder(dir);
+}
+
+async function readableFolder() {
+  if (!resultsDir) return false;
+  if (!resultsDir.queryPermission) return true;
+  return await resultsDir.queryPermission({ mode: "read" }) === "granted"
+    || await resultsDir.requestPermission({ mode: "read" }) === "granted";
+}
+
+async function loadNewestRun() {
+  if (!await readableFolder()) { toast("That folder was not readable"); return; }
+  const names = [];
+  for await (const [name, handle] of resultsDir.entries())
+    if (handle.kind === "directory") names.push(name);
+  const run = newestRun(names);
+  let dir = resultsDir, label = resultsDir.name;
+  if (run) { dir = await resultsDir.getDirectoryHandle(run); label = run; }
+  let file;
+  try { file = await (await dir.getFileHandle("results.json")).getFile(); }
+  catch (e) { toast("No results.json in " + label); return; }
+  try {
+    const payload = JSON.parse(await file.text());
+    automationProposals(payload, result.check, state.found);
+    pendingAutomation = payload;
+    loadedRun = label;
+  } catch (e) { toast(S(e.message) || "Could not read that run"); return; }
+  renderPanel();
+}
 function foundOf(id) { return state.found[id] || null; }
 function setFound(id, patch) {
   const cur = state.found[id] || {};
@@ -997,6 +1058,9 @@ function viewCheck(r) {
       ? `<button class="primary" id="btnCopyBoxes">Copy the ${
           boxesToDownload(r.check, state.found).length} boxes to download</button>` : ""}
     <button id="btnAutoCsv">Export automation worklist</button>
+    ${window.showDirectoryPicker ? `<button id="btnNewestRun">${resultsDir
+      ? "Newest script run" : "Point at the results folder"}</button>` : ""}
+    ${resultsDir ? `<button id="btnPickFolder" class="rbtn">change folder</button>` : ""}
     <label class="rbtn">Review script results <input id="autoResults" type="file" accept=".json" hidden></label>
     <span class="note">${open} of ${r.check.length} still open${r.noip.length
       ? `, ${r.noip.length} with no IP in the links sheet` : ""}</span>
@@ -1013,7 +1077,7 @@ function automationPreview() {
   if (!pendingAutomation) return "";
   const proposals = automationProposals(pendingAutomation, result.check, state.found);
   const ready = proposals.filter(p => !p.skip).length;
-  return `<div class="step"><b>Review automated IO module checks</b>
+  return `<div class="step"><b>Review automated IO module checks${loadedRun ? " from " + h(loadedRun) : ""}</b>
     <p>${ready} answers can be applied. Existing answers are preserved. Unknown results stay open.
     Compare the module evidence and the script's local screenshots with your manual checks.</p>
     <table><thead><tr><th>ID</th><th>Proposed answer</th><th>Evidence / reason</th><th>Import</th></tr></thead>
@@ -1257,6 +1321,18 @@ function wirePanel() {
     [["id", "maxtime_url", "intersection"]].concat(result.check
       .filter(e => e.url && !(foundOf(S(e.id)) || {}).biu && !(foundOf(S(e.id)) || {}).saved)
       .map(e => [e.id, e.url, intersection(e)])));
+  const newest = document.getElementById("btnNewestRun");
+  if (newest) newest.onclick = async () => {
+    try {
+      if (!resultsDir) await pickResultsFolder();
+      if (resultsDir) await loadNewestRun();
+    } catch (e) { if (e.name !== "AbortError") toast(S(e.message) || "Could not open that folder"); }
+  };
+  const pickFolder = document.getElementById("btnPickFolder");
+  if (pickFolder) pickFolder.onclick = async () => {
+    try { await pickResultsFolder(); await loadNewestRun(); }
+    catch (e) { if (e.name !== "AbortError") toast(S(e.message) || "Could not open that folder"); }
+  };
   const autoInput = document.getElementById("autoResults");
   if (autoInput) autoInput.onchange = async () => {
     try {
@@ -1276,11 +1352,11 @@ function wirePanel() {
       state.found[p.id] = { ...cur, biu: p.biu, saved: false, evidence: p.evidence,
         note: [cur.note, "Reviewed script check " + p.checked_at + ": " + p.reason].filter(Boolean).join("; ") };
     }
-    pendingAutomation = null;
+    pendingAutomation = null; loadedRun = "";
     saveFound(); refresh(); toast("Reviewed answers applied; box downloads remain manual");
   };
   const cancel = document.getElementById("cancelAutomation");
-  if (cancel) cancel.onclick = () => { pendingAutomation = null; renderPanel(); };
+  if (cancel) cancel.onclick = () => { pendingAutomation = null; loadedRun = ""; renderPanel(); };
   const cid = document.getElementById("btnCopyIds");
   if (cid) cid.onclick = () => copyText(
     result.check.map(e => e.id).join("\n") + "\n", result.check.length + " IDs");
@@ -1350,6 +1426,8 @@ function loadDemo() {
 
 wireInputs();
 refresh();
+// The folder chosen last time comes back; reading it still needs a click.
+folderHandle("get").then(dir => { if (dir) useResultsFolder(dir); }).catch(() => {});
 </script>
 </body>
 </html>
