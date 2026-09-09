@@ -1,14 +1,17 @@
 """Offline browser integration tests; requires Playwright and Chromium.
 Run: python -m unittest discover -s downloader -p test_biu_browser.py
 """
+import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from playwright.sync_api import sync_playwright
 
 from check_biu import (navigate, inspect_modules, classify, stable_tables, diagnose,
-                       choose_account_type, SCHEMA)
+                       choose_account_type, run_batch, SCHEMA)
 from test_biu import PROFILE
 
 LOGIN = '''<!doctype html><body>
@@ -306,6 +309,40 @@ class BrowserTests(unittest.TestCase):
         self.assertFalse(after[work[2]['id']]['failed'])
         self.assertIn('1 already confirmed', panel.inner_text())
         ctx.close()
+
+    def test_several_controllers_are_checked_at_once(self):
+        """Workers each drive their own browser, so the pool is the thing tested."""
+        pages = {'/maxtime/': LOGIN,
+                 '/maxtime/' + 'Controller/AdvancedIO/CabinetConfiguration/IOModules':
+                     maxtime(TWO_MODULES)}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = pages.get(self.path.split('?')[0], MENU.replace('ROWS', ''))
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body.encode())
+
+            def log_message(self, *a):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = 'http://127.0.0.1:%d/maxtime/' % server.server_address[1]
+        rows = [dict(id=str(4100 + i), maxtime_url=url) for i in range(6)]
+        args = argparse.Namespace(account_type=None, account_open=None, browser='chromium',
+                                  headless=True, delay=0, stop_after=3, workers=3)
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            run_batch(rows, args, 'synthetic-user', 'synthetic-password', GRID_PROFILE, run)
+            saved = json.loads((run / 'results.json').read_text())
+        server.shutdown()
+        server.server_close()
+        self.assertEqual([r['id'] for r in saved['results']], [r['id'] for r in rows])
+        self.assertEqual({r['biu'] for r in saved['results']}, {'yes'})
+        self.assertEqual(saved['schema'], SCHEMA)
 
     def test_source_lookup_and_missing_folder_ids(self):
         ctx = self.browser.new_context()

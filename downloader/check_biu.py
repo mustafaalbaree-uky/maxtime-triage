@@ -6,11 +6,15 @@ from datetime import datetime, timezone
 from getpass import getpass
 import json
 from pathlib import Path
+import queue
 import re
+import threading
 import time
 from urllib.parse import urljoin, urlsplit
 
 SCHEMA = 'maxtime-biu-v1'
+# Workers write results and print through this, so lines do not interleave.
+LOCK = threading.Lock()
 # The IO Modules screen has its own address, so the menu walk is only a fallback.
 IO_PATH = 'Controller/AdvancedIO/CabinetConfiguration/IOModules'
 IO_MARKER = re.compile(r'^IO Modules?$', re.I)
@@ -275,9 +279,10 @@ def navigate(page, url, username, password, account_type=None, account_open=None
         chosen = choose_account_type(page, account_type, account_open)
         # Printed only when it changes, so a controller pointing at a different
         # profile server stands out instead of scrolling past with the rest.
-        if chosen != navigate.last_account_type:
-            print('Account type:', chosen)
-            navigate.last_account_type = chosen
+        with LOCK:
+            if chosen != navigate.last_account_type:
+                print('Account type:', chosen)
+                navigate.last_account_type = chosen
     pw = page.locator('input[type=password]:visible')
     if pw.count():
         user = page.locator('input:visible:not([type=password]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio])')
@@ -489,6 +494,111 @@ def inspect_modules(page, profile):
     return matches[0]['rows']
 
 
+def launch(p, args, headless=None):
+    return p.chromium.launch(headless=args.headless if headless is None else headless,
+                             **({} if args.browser == 'chromium' else {'channel': args.browser}))
+
+
+def check_one(browser, row, args, username, password, profile, run):
+    """One controller in its own context. Returns the record and whether the
+    login is what failed."""
+    context = browser.new_context(accept_downloads=False)
+    page = context.new_page()
+    page.set_default_timeout(15000)
+    record = dict(id=row['id'], maxtime_url=row['maxtime_url'], biu='unknown',
+                  checked_at=datetime.now(timezone.utc).isoformat(), evidence=[], reason='')
+    login_failed = False
+    try:
+        navigate(page, row['maxtime_url'], username, password, args.account_type, args.account_open)
+        if origin(page.url) != origin(row['maxtime_url']):
+            raise RuntimeError('Controller redirected to a different origin')
+        evidence = inspect_modules(page, profile)
+        record['evidence'] = evidence
+        record['biu'], record['reason'] = classify(evidence, profile)
+        # Capture only after successful navigation; never screenshot a login form.
+        page.screenshot(path=str(run / (row['id'] + '.png')), full_page=True)
+    except Exception as exc:
+        # No exception bodies, DOM dumps, cookies, URLs with tokens, or credentials in logs.
+        try:
+            login_failed = not page.is_closed() and bool(page.locator('input[type=password]:visible').count())
+        except Exception:
+            login_failed = True  # A lost browser session should also stop the batch.
+        if not login_failed:
+            # Past the login and still failed, so the screen itself is the
+            # evidence. Same rule: never capture a login form.
+            try:
+                page.screenshot(path=str(run / (row['id'] + '-failed.png')), full_page=True)
+            except Exception:
+                pass
+        record['biu'] = 'unknown'
+        record['reason'] = str(exc) if type(exc) is RuntimeError else type(exc).__name__ + ': login, navigation or read failed'
+    finally:
+        context.close()
+    return record, login_failed
+
+
+def write_results(run, results):
+    temp = run / 'results.tmp'
+    temp.write_text(json.dumps(dict(schema=SCHEMA, results=results), indent=2), encoding='utf-8')
+    temp.replace(run / 'results.json')
+
+
+def run_batch(rows, args, username, password, profile, run):
+    """Controllers are separate machines, so several at once is not pressure on
+    any one of them. Each worker drives its own browser: Playwright's objects
+    belong to the thread that made them and cannot be shared."""
+    from playwright.sync_api import sync_playwright
+    todo = queue.Queue()
+    for item in enumerate(rows):
+        todo.put(item)
+    done, state = {}, dict(refused=0, stop=False)
+
+    def worker():
+        with sync_playwright() as p:
+            browser = launch(p, args)
+            try:
+                while not state['stop']:
+                    try:
+                        index, row = todo.get_nowait()
+                    except queue.Empty:
+                        return
+                    record, login_failed = check_one(browser, row, args, username,
+                                                     password, profile, run)
+                    with LOCK:
+                        done[index] = record
+                        write_results(run, [done[k] for k in sorted(done)])
+                        print(f"{len(done)}/{len(rows)} {row['id']}: "
+                              f"{record['biu']} — {record['reason']}", flush=True)
+                        state['refused'] = state['refused'] + 1 if login_failed else 0
+                        if state['refused'] >= args.stop_after:
+                            state['stop'] = True
+                            print(f"Login did not complete on {state['refused']} controllers in "
+                                  'a row. Stopping; verify the login before trying again.')
+                        elif login_failed:
+                            print('  Login did not complete here. Carrying on; this ID stays '
+                                  'in the next worklist.')
+                    if args.delay:
+                        time.sleep(args.delay)
+            finally:
+                browser.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(min(args.workers, len(rows)))]
+    for t in threads:
+        t.start()
+    try:
+        for t in threads:
+            while t.is_alive():
+                t.join(0.3)
+    except KeyboardInterrupt:
+        state['stop'] = True     # Let the checks already running finish and be saved.
+        print('\nStopping after the checks already in flight.')
+        for t in threads:
+            while t.is_alive():
+                t.join(0.3)
+        raise
+    write_results(run, [done[k] for k in sorted(done)])
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('csv', type=Path)
@@ -506,9 +616,15 @@ def main():
     ap.add_argument('--delay', type=float, default=3, help='Seconds between controllers')
     ap.add_argument('--stop-after', type=int, default=3,
                     help='Stop after this many login failures in a row (default: 3)')
+    ap.add_argument('--workers', type=int, default=1,
+                    help='Controllers to check at once (default: 1)')
+    ap.add_argument('--headless', action='store_true',
+                    help='No visible browser window, which is faster')
     args = ap.parse_args()
-    if args.limit < 1 or args.delay < 0 or args.stop_after < 1:
-        ap.error('limit and stop-after must be positive and delay nonnegative')
+    if args.limit < 1 or args.delay < 0 or args.stop_after < 1 or args.workers < 1:
+        ap.error('limit, stop-after and workers must be positive, delay nonnegative')
+    if args.workers > 1 and (args.setup or args.describe):
+        ap.error('--setup and --describe drive one controller by hand')
     worklist = read_worklist(args.csv)
     rows = worklist
     if args.only:
@@ -532,68 +648,21 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     run = args.out / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     run.mkdir()
-    results = []
-    refused = 0          # Consecutive login failures, not the total.
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, **({} if args.browser == 'chromium' else {'channel': args.browser}))
-        try:
-            for i, row in enumerate(rows):
+    if manual:
+        with sync_playwright() as p:
+            browser = launch(p, args, headless=False)   # These two are driven by hand.
+            try:
                 context = browser.new_context(accept_downloads=False)
                 page = context.new_page()
                 page.set_default_timeout(15000)
                 if args.describe:
-                    describe(page, row, args.profile.with_name('biu-diagnostic.json'))
-                    return 0
-                if args.setup:
-                    setup(page, row, args.profile)
-                    return 0
-                record = dict(id=row['id'], maxtime_url=row['maxtime_url'], biu='unknown',
-                              checked_at=datetime.now(timezone.utc).isoformat(), evidence=[], reason='')
-                login_failed = False
-                try:
-                    navigate(page, row['maxtime_url'], username, password, args.account_type, args.account_open)
-                    if origin(page.url) != origin(row['maxtime_url']):
-                        raise RuntimeError('Controller redirected to a different origin')
-                    evidence = inspect_modules(page, profile)
-                    record['evidence'] = evidence
-                    record['biu'], record['reason'] = classify(evidence, profile)
-                    # Capture only after successful navigation; never screenshot a login form.
-                    page.screenshot(path=str(run / (row['id'] + '.png')), full_page=True)
-                except Exception as exc:
-                    # No exception bodies, DOM dumps, cookies, URLs with tokens, or credentials in logs.
-                    try:
-                        login_failed = not page.is_closed() and bool(page.locator('input[type=password]:visible').count())
-                    except Exception:
-                        login_failed = True  # A lost browser session should also stop the batch.
-                    if not login_failed:
-                        # Past the login and still failed, so the screen itself is
-                        # the evidence. Same rule: never capture a login form.
-                        try:
-                            page.screenshot(path=str(run / (row['id'] + '-failed.png')), full_page=True)
-                        except Exception:
-                            pass
-                    record['biu'] = 'unknown'
-                    record['reason'] = str(exc) if type(exc) is RuntimeError else type(exc).__name__ + ': login, navigation or read failed'
-                finally:
-                    context.close()
-                results.append(record)
-                payload = dict(schema=SCHEMA, results=results)
-                temp = run / 'results.tmp'
-                temp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
-                temp.replace(run / 'results.json')
-                print(f"{i+1}/{len(rows)} {row['id']}: {record['biu']} — {record['reason']}")
-                refused = refused + 1 if login_failed else 0
-                if refused >= args.stop_after:
-                    print(f'Login did not complete on {refused} controllers in a row. '
-                          'Stopping; verify the login before trying again.')
-                    break
-                if login_failed:
-                    print('  Login did not complete here. Carrying on; this ID stays in the '
-                          'next worklist.')
-                if i + 1 < len(rows):
-                    time.sleep(args.delay)
-        finally:
-            browser.close()
+                    describe(page, rows[0], args.profile.with_name('biu-diagnostic.json'))
+                else:
+                    setup(page, rows[0], args.profile)
+            finally:
+                browser.close()
+        return 0
+    run_batch(rows, args, username, password, profile, run)
     print('Import into box.html:', run / 'results.json')
     print('Review the evidence and screenshots before applying results. Box downloads stay manual.')
     return 0

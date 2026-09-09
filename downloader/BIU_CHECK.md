@@ -226,8 +226,31 @@ py check_biu.py biu_worklist.csv --limit 3
 py check_biu.py biu_worklist.csv --all
 ```
 
-Without `--all` or `--limit`, it checks **one** controller. Checks are sequential
-with three seconds between controllers. If a failed check is still showing the
+Without `--all` or `--limit`, it checks **one** controller.
+
+## Going faster
+
+Controllers are separate machines, so checking several at once is not pressure
+on any one of them:
+
+```
+py check_biu.py biu_worklist.csv --all --workers 4 --headless --delay 0 --account-type "Profile Server" --account-open Controller
+```
+
+- `--workers N` checks N controllers at once, each in its own browser. Start at
+  3 or 4. The thing actually shared is the profile server every login goes
+  through, so this is a reason for restraint rather than a reason not to.
+- `--headless` runs with no visible window, which is faster and stops four
+  browser windows taking your screen. Watch one run without it first.
+- `--delay 0` drops the pause between controllers.
+
+Results are written after every controller and stay in worklist order however
+the workers finish. Ctrl+C lets the checks already running finish and saves
+them, rather than tearing the browsers down mid request.
+
+`--setup` and `--describe` always use one visible browser, since you drive
+those by hand. Checks are otherwise sequential with three seconds between
+controllers. If a failed check is still showing the
 password form, the batch stops instead of repeating the failed login. Import accepted results and export a
 fresh worklist before continuing; that is how you resume without rechecking
 completed rows. Unknown rows remain in the next export.
