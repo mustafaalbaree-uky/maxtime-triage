@@ -178,6 +178,21 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(page.locator('div').inner_text(), 'chosen')
         ctx.close()
 
+    def test_a_custom_account_dropdown_is_opened_before_the_option_is_picked(self):
+        """MAXTIME's sign in page: no select, and the list is drawn only once opened."""
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        profile_server = 'Profile Server - http://KYTrafficSigOps.kytc.ky.gov:58080'
+        page.set_content(
+            '<div id=box><div id=now onclick="list.hidden=false">Controller</div>'
+            '<div id=list hidden>'
+            '<div onclick="now.textContent=this.textContent;list.hidden=true">Controller</div>'
+            '<div onclick="now.textContent=this.textContent;list.hidden=true">' + profile_server + '</div>'
+            '</div></div><input id=u><input type=password>')
+        self.assertEqual(choose_account_type(page, 'Profile Server', 'Controller'), profile_server)
+        self.assertEqual(page.locator('#now').inner_text(), profile_server)
+        ctx.close()
+
     def test_source_lookup_and_missing_folder_ids(self):
         ctx = self.browser.new_context()
         page = ctx.new_page()

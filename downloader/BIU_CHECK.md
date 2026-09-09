@@ -91,16 +91,21 @@ control, and a dropdown is printed as its numbered options with a `*` on the
 one currently selected. It never prints anything you typed. Type `QUIT` to
 close it.
 
-Then pass the choice on every run, by label or by position:
+Then pass the choice on every run. Part of the option label is enough:
 
 ```
-py check_biu.py biu_worklist.csv --only 4821 --account-type "Profile server"
-py check_biu.py biu_worklist.csv --only 4821 --account-type 2
+py check_biu.py biu_worklist.csv --only 4821 --account-type "Profile Server" --account-open Controller
 ```
 
-Prefer the label. A position silently picks a different account if the
+`--account-type` is the option to pick. `--account-open` is the text the
+dropdown shows while closed, clicked first to open the list, and it is only
+needed when the list is not a native dropdown. The option is tried before the
+list is opened, so an already open list also works.
+
+A position such as `--account-type 2` works on a native dropdown only. Prefer
+the label either way: a position silently picks a different account if the
 firmware ever reorders the list. The choice is made before the username and
-password are filled in, and the terminal prints what it selected.
+password are filled in, and the terminal prints back what it selected.
 
 ## Test automatic navigation on one controller
 

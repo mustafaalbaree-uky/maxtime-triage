@@ -85,13 +85,17 @@ DIAGNOSE_JS = r"""() => {
      return tag + role + ' ' + name + ' :: ' + cut(e.textContent, 40);
    }),
    labels: Array.from(document.querySelectorAll('body *')).filter(e => !e.children.length && visible(e) &&
-     (e.textContent || '').trim() && (e.textContent || '').trim().length <= 40).slice(0, 20).map(e => cut(e.textContent, 40))
+     (e.textContent || '').trim() && (e.textContent || '').trim().length <= 120).slice(0, 24).map(e => cut(e.textContent, 120))
  };
 }"""
 
 
+def norm_space(value):
+    return re.sub(r'\s+', ' ', str(value)).strip()
+
+
 def norm(value):
-    return re.sub(r'\s+', ' ', str(value)).strip().casefold()
+    return norm_space(value).casefold()
 
 
 def origin(url):
@@ -181,25 +185,60 @@ def click_text(page, pattern, timeout=8000):
     raise RuntimeError('Could not uniquely locate navigation: ' + pattern)
 
 
-def choose_account_type(page, choice):
+CHOICE_JS = r"""(want) => {
+ const norm = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+ const visible = e => !!(e.getClientRects().length);
+ const target = norm(want);
+ const found = Array.from(document.querySelectorAll('body *'))
+   .filter(e => visible(e) && norm(e.innerText).includes(target));
+ // The smallest element still carrying the text is the choice, not its panel,
+ // and the innermost of equals is the option rather than its wrapper.
+ const depth = e => { let d = 0; for (let p = e; p; p = p.parentElement) d++; return d; };
+ found.sort((a, b) => norm(a.innerText).length - norm(b.innerText).length || depth(b) - depth(a));
+ return found[0] || null;
+}"""
+
+
+def click_choice(page, text, timeout=8000):
+    """Click the smallest visible element whose text contains this."""
+    until = time.monotonic() + timeout / 1000
+    while True:
+        element = page.evaluate_handle(CHOICE_JS, text).as_element()
+        if element:
+            label = norm_space(element.inner_text())
+            element.click()
+            return label
+        if time.monotonic() >= until:
+            raise RuntimeError('Nothing visible to click matching: ' + text)
+        page.wait_for_timeout(200)
+
+
+def choose_account_type(page, choice, opener=None):
     """Some firmware asks which kind of account before the credentials. The
-    choice is an exact option label, or a position such as 2."""
+    choice is part of an option label, or a position such as 2."""
     for select in page.locator('select:visible').all():
         labels = [o.inner_text().strip() for o in select.locator('option').all()]
         if choice.isdigit() and 1 <= int(choice) <= len(labels):
             select.select_option(index=int(choice) - 1)
             return labels[int(choice) - 1]
-        for i, label in enumerate(labels):
-            if norm(label) == norm(choice):
-                select.select_option(index=i)
-                return label
+        hits = [i for i, label in enumerate(labels) if norm(choice) in norm(label)]
+        if len(hits) == 1:
+            select.select_option(index=hits[0])
+            return labels[hits[0]]
     if choice.isdigit():
         raise RuntimeError('No login dropdown with a choice number ' + choice)
-    click_text(page, '^' + re.escape(choice) + '$')  # A custom dropdown is not a select.
-    return choice
+    # A custom dropdown is not a select. The option is only there once the list
+    # is open, and the list may already be open, so try the option first.
+    try:
+        return click_choice(page, choice, 1500)
+    except RuntimeError:
+        if not opener:
+            raise
+    click_choice(page, opener)
+    return click_choice(page, choice)
 
 
-def navigate(page, url, username, password, account_type=None):
+def navigate(page, url, username, password, account_type=None, account_open=None):
     page.goto(url, wait_until='domcontentloaded')
     try:
         click_text(page, r'^Sign\s*in(?:\s*to)?$', 3000)
@@ -212,7 +251,7 @@ def navigate(page, url, username, password, account_type=None):
             pass
     if account_type:
         # Chosen before the fields are read, since it can redraw the form.
-        print('Account type:', choose_account_type(page, account_type))
+        print('Account type:', choose_account_type(page, account_type, account_open))
     pw = page.locator('input[type=password]:visible')
     if pw.count():
         user = page.locator('input:visible:not([type=password]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio])')
@@ -418,7 +457,8 @@ def main():
     ap.add_argument('csv', type=Path)
     ap.add_argument('--setup', action='store_true', help='Calibrate the full module table once, manually')
     ap.add_argument('--describe', action='store_true', help='Open one controller and report what is on screen')
-    ap.add_argument('--account-type', help='Login dropdown choice: an exact option label, or a position such as 2')
+    ap.add_argument('--account-type', help='Login dropdown choice: part of an option label, or a position such as 2')
+    ap.add_argument('--account-open', help='Text of the closed dropdown, clicked first to open the list')
     ap.add_argument('--profile', type=Path, default=Path('biu-profile.json'))
     ap.add_argument('--out', type=Path, default=Path('biu-results'))
     ap.add_argument('--only', help='One signal ID')
@@ -470,7 +510,7 @@ def main():
                               checked_at=datetime.now(timezone.utc).isoformat(), evidence=[], reason='')
                 login_failed = False
                 try:
-                    navigate(page, row['maxtime_url'], username, password, args.account_type)
+                    navigate(page, row['maxtime_url'], username, password, args.account_type, args.account_open)
                     if origin(page.url) != origin(row['maxtime_url']):
                         raise RuntimeError('Controller redirected to a different origin')
                     evidence = inspect_modules(page, profile)
