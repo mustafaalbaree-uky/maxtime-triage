@@ -50,6 +50,14 @@ Advanced IO > Cabinet Configuration > IO Modules**. Return to the terminal
 and press Enter. It displays readable tables. Select the IO module table and
 its module number and type columns by number.
 
+This screen carries no HTML table and no row elements. The module list is a
+set of grid panes: a frozen module column beside a scrolling pane, with the
+column headings in panes of their own. The reader rebuilds the rows from where
+the cells sit on screen, so the table it shows you is the table you see. Check
+it row by row before confirming. Only rows on screen are read, so if a
+controller ever has more modules than fit the pane, scroll until all of them
+are visible before pressing Enter.
+
 Only type `COMPLETE` if it really contains every configured module: no paging,
 filters, collapsed modules or virtual scrolling. The first table row must be
 column headings, and each following row must represent one configured module,
@@ -76,8 +84,10 @@ py check_biu.py biu_worklist.csv --only 4821
 ```
 
 It asks for your username and hidden password once, keeping them in memory,
-then attempts the sign-in/profile-server workflow and the four menu items.
-Watch the browser during this first test. Each controller gets a fresh session.
+then signs in and goes straight to the screen's own address,
+`/maxtime/Controller/AdvancedIO/CabinetConfiguration/IOModules`. Firmware that
+does not route by address falls back to the four menu items. Watch the browser
+during this first test. Each controller gets a fresh session.
 
 Results go in a new timestamped folder beneath `biu-results`, with
 `results.json` and screenshots of successfully read module pages. Each result
@@ -90,6 +100,21 @@ Calibrate on one controller, then test at least one known **no BIU** and one
 known **TS2 DR1 BIU in module 2** before trusting a large batch. A module type not observed during calibration, an unfamiliar
 BIU type/position, missing module type, incomplete table, changed headers,
 failed login or timeout stays **unknown**.
+
+## What the unknowns are for
+
+Calibration records the module types on the one controller you calibrated
+against, and nothing else. A cabinet built from different modules comes back
+`unknown` naming the type it found, for example `Module type not seen during
+calibration: ts2 siu`. A BIU anywhere other than module 2 comes back `unknown`
+naming where it was. That is deliberate: the script never guesses `no` from a
+module it has not been shown.
+
+So the first full run doubles as the survey. Run it, then read the unknown
+reasons: between them they name every module type in the field. Bring that
+list back and we decide together whether to widen `observed_non_biu_types` in
+`biu-profile.json`, which is a plain list of type names. Widening it can only
+turn `unknown` into `no`, and only for cabinets with no BIU in any module.
 
 A lone module 1 means `no` only because you certified during setup that this
 is the complete configured module table. Recalibrate if the firmware/layout

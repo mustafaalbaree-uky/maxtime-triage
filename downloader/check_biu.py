@@ -8,23 +8,49 @@ import json
 from pathlib import Path
 import re
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 SCHEMA = 'maxtime-biu-v1'
+# The IO Modules screen has its own address, so the menu walk is only a fallback.
+IO_PATH = 'Controller/AdvancedIO/CabinetConfiguration/IOModules'
+IO_MARKER = re.compile(r'^IO Modules?$', re.I)
 TABLES_JS = r"""() => {
  const visible = e => !!(e.getClientRects().length);
  const text = e => {
-   const s = e.querySelector('select');
+   const s = e.matches('select') ? e : e.querySelector('select');
    if (s) return Array.from(s.selectedOptions).map(o => o.textContent.trim()).join(' ');
-   const i = e.querySelector('input:not([type=password]):not([type=hidden])');
-   return i ? i.value.trim() : e.innerText.trim();
+   const i = e.matches('input') ? e : e.querySelector('input:not([type=password]):not([type=hidden])');
+   if (i && i.type !== 'password' && i.type !== 'hidden') return i.value.trim();
+   return e.innerText.trim();
  };
- return Array.from(document.querySelectorAll('table,[role=grid]')).map((t,index) => ({
-   index, visible: visible(t),
-   rows: Array.from(t.querySelectorAll('tr,[role=row]')).filter(visible).map(r =>
+ const containers = Array.from(document.querySelectorAll('table,[role=grid],[role=treegrid]')).filter(visible);
+ const tables = [];
+ containers.forEach((t, index) => {
+   const rows = Array.from(t.querySelectorAll('tr,[role=row]')).filter(visible).map(r =>
      Array.from(r.querySelectorAll('th,td,[role=columnheader],[role=gridcell]')).map(text)
-   ).filter(r => r.length)
- })).filter(t => t.visible && t.rows.length > 1);
+   ).filter(r => r.length);
+   if (rows.length > 1) tables.push({index, source: 'rows', rows});
+ });
+ // MaxTime draws the IO module list as grids that carry no row elements: a
+ // frozen first column and a separate header pane are several containers on
+ // screen but one table to the eye. Rebuild the rows from where cells sit.
+ const cells = [], seen = new Set();
+ for (const t of containers) {
+   let found = Array.from(t.querySelectorAll('[role=gridcell],[role=columnheader],[role=rowheader],th,td'));
+   if (!found.length) found = Array.from(t.querySelectorAll('*')).filter(e => e.matches('select,input') || !e.querySelector('*'));
+   for (const c of found) if (!seen.has(c) && visible(c)) { seen.add(c); cells.push(c); }
+ }
+ const placed = cells.map(e => { const r = e.getBoundingClientRect(); return {x: r.left, y: r.top, t: text(e)}; })
+                     .filter(c => c.t !== '');
+ placed.sort((a, b) => a.y - b.y || a.x - b.x);
+ const banded = [];
+ for (const c of placed) {
+   const row = banded[banded.length - 1];
+   if (row && c.y - row.y <= 8) row.cells.push(c); else banded.push({y: c.y, cells: [c]});
+ }
+ const rows = banded.map(r => r.cells.sort((a, b) => a.x - b.x).map(c => c.t));
+ if (rows.length > 1) tables.push({index: -1, source: 'position', rows});
+ return tables;
 }"""
 
 DIAGNOSE_JS = r"""() => {
@@ -105,10 +131,12 @@ def classify(rows, profile):
     target = modules.get(2)
     if target == 'ts2 dr1 biu':
         return 'yes', 'Module 2: TS2 DR1 BIU'
-    if any('biu' in t for n, t in modules.items()):
-        return 'unknown', 'BIU type or position differs from the agreed module 2 rule'
-    if any(t not in profile.get('observed_non_biu_types', []) for t in modules.values()):
-        return 'unknown', 'Unrecognized module type; verify manually and recalibrate'
+    biu = ['module %d: %s' % (n, t) for n, t in sorted(modules.items()) if 'biu' in t]
+    if biu:
+        return 'unknown', 'BIU outside the agreed module 2 rule (' + '; '.join(biu) + ')'
+    unseen = sorted({t for t in modules.values() if t not in profile.get('observed_non_biu_types', [])})
+    if unseen:
+        return 'unknown', 'Module type not seen during calibration: ' + ', '.join(unseen)
     if not profile.get('complete_table_confirmed'):
         return 'unknown', 'Table completeness has not been confirmed'
     return 'no', ('Only module 1 is configured' if target is None else 'Module 2: ' + target)
@@ -170,8 +198,23 @@ def navigate(page, url, username, password):
         pw.fill(password)
         click_text(page, r'^(?:Sign\s*in|Log\s*in|Login)$')
         pw.wait_for(state='hidden', timeout=15000)
-    for label in ('Controller', 'Advanced IO', 'Cabinet Configuration', 'IO Modules'):
-        click_text(page, '^' + re.escape(label) + '$')
+    home = page.url
+    page.goto(urljoin(url if url.endswith('/') else url + '/', IO_PATH), wait_until='domcontentloaded')
+    if not showing_io_modules(page):
+        # Firmware that does not route by address still walks the menus, from
+        # wherever the session was after signing in rather than from the login.
+        page.goto(home, wait_until='domcontentloaded')
+        for label in ('Controller', 'Advanced IO', 'Cabinet Configuration', 'IO Modules'):
+            click_text(page, '^' + re.escape(label) + '$')
+
+
+def showing_io_modules(page, timeout=6000):
+    until = time.monotonic() + timeout / 1000
+    while time.monotonic() < until:
+        if any(frame.get_by_text(IO_MARKER).filter(visible=True).count() for frame in page.frames):
+            return True
+        page.wait_for_timeout(200)
+    return False
 
 
 def snapshot(page):
@@ -218,7 +261,10 @@ def stable_tables(page, hold=2.0, budget=15.0):
                     churn[key] = changed_cell(seen[key], rows)
                 since[key] = now
         seen = tables
-        ready = [dict(rows=rows) for key, rows in tables.items() if now - since[key] >= hold]
+        ready = []  # The same list read two ways is one table, not an ambiguous pair.
+        for key, rows in tables.items():
+            if now - since[key] >= hold and all(rows != t['rows'] for t in ready):
+                ready.append(dict(rows=rows))
         if ready:
             return ready
         if now >= until:
@@ -316,8 +362,7 @@ def setup(page, row, path):
 def inspect_modules(page, profile):
     if page.locator('input[type=password]:visible').count():
         raise RuntimeError('Still on login page')
-    if not any(frame.get_by_text(re.compile(r'^IO Modules$', re.I)).filter(visible=True).count()
-               for frame in page.frames):
+    if not any(frame.get_by_text(IO_MARKER).filter(visible=True).count() for frame in page.frames):
         raise RuntimeError('IO Modules page marker missing')
     tables = stable_tables(page)
     matches = [t for t in tables if t['rows'][0] == profile['headers']]

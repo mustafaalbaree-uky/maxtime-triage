@@ -10,11 +10,17 @@ from playwright.sync_api import sync_playwright
 from check_biu import navigate, inspect_modules, classify, stable_tables, diagnose, SCHEMA
 from test_biu import PROFILE
 
-MOCK = '''<!doctype html><body>
+LOGIN = '''<!doctype html><body>
 <button onclick="this.outerHTML='<button onclick=login()>Profile server</button>'">Sign into</button>
 <script>
 function login() { document.body.innerHTML = `<input id=user><input id=pw type=password>
-<button onclick="document.body.innerHTML='<button onclick=controller()>Controller</button>'">Sign in</button>`; }
+<button onclick="location.search='?in=1'">Sign in</button>`; }
+</script></body>'''
+
+# Signing in leaves a session, so the menu walk starts from wherever the
+# controller left the browser rather than from a fresh login page.
+MENU = '''<!doctype html><body><button onclick=controller()>Controller</button>
+<script>
 function controller() { document.body.innerHTML='<select onchange=advanced()><option>Choose menu</option><option>Advanced IO</option></select>'; }
 function advanced() { document.body.innerHTML='<button onclick=cabinet()>Cabinet Configuration</button>'; }
 function cabinet() { document.body.innerHTML='<button onclick=modules()>IO Modules</button>'; }
@@ -22,6 +28,32 @@ function modules() { document.body.innerHTML=`<h1>IO Modules</h1>
 <table><tr><th>Module</th><th>Type</th></tr>
 <tr><td>1</td><td><select><option selected>SIU</option><option>TS2 DR1 BIU</option></select></td></tr>ROWS</table>`; }
 </script></body>'''
+
+
+# The IO Modules screen as one real controller draws it: no table and no row
+# elements, a frozen module column and a separate header pane, four role=grid
+# containers that only look like one table because of where the cells sit.
+CELL = 'line-height:24px;height:24px;'
+MAXTIME = '''<!doctype html><body><h1>Cabinet Configuration</h1>
+<div role=grid style="position:fixed;left:0;top:0;width:130px"><div style="CELL">IO Module</div></div>
+<div role=grid style="position:fixed;left:140px;top:0;display:grid;grid-template-columns:160px 140px">
+<div style="CELL">Type</div><div style="CELL">Fault Response</div></div>
+<div role=grid style="position:fixed;left:0;top:30px;width:130px">LEFT</div>
+<div role=grid style="position:fixed;left:140px;top:30px;display:grid;grid-template-columns:160px 140px">RIGHT</div>
+</body>'''.replace('CELL', CELL)
+
+ONE_MODULE = ('<div style="CELL">1</div>',
+              '<div style="CELL">Caltrans 332</div><div style="CELL">Default</div>')
+TWO_MODULES = (ONE_MODULE[0] + '<div style="CELL">2</div>',
+               ONE_MODULE[1] + '<div style="CELL">TS2 DR1 BIU</div><div style="CELL">Default</div>')
+GRID_PROFILE = dict(headers=['IO Module', 'Type', 'Fault Response'], module_column=0,
+                    type_column=1, complete_table_confirmed=True,
+                    observed_non_biu_types=['caltrans 332'])
+
+
+def maxtime(modules):
+    return MAXTIME.replace('LEFT', modules[0]).replace('RIGHT', modules[1]).replace('CELL', CELL)
+
 
 
 class BrowserTests(unittest.TestCase):
@@ -35,13 +67,16 @@ class BrowserTests(unittest.TestCase):
         cls.browser.close()
         cls.p.stop()
 
-    def test_navigation_and_selected_module_types(self):
+    def test_navigation_falls_back_to_the_menu_walk(self):
+        """This firmware does not route by address, so the four menus are used."""
         for rows, expected in [('', 'no'),
             ('<tr><td>2</td><td><select><option>None</option><option selected>TS2 DR1 BIU</option></select></td></tr>', 'yes')]:
             with self.subTest(expected=expected):
                 ctx = self.browser.new_context()
                 page = ctx.new_page()
-                ctx.route('**/*', lambda route: route.fulfill(body=MOCK.replace('ROWS', rows), content_type='text/html'))
+                ctx.route('**/*', lambda route: route.fulfill(content_type='text/html', body=(
+                    '<h1>Nothing routed here</h1>' if route.request.url.endswith('IOModules')
+                    else MENU.replace('ROWS', rows) if 'in=1' in route.request.url else LOGIN)))
                 navigate(page, 'http://192.0.2.1/maxtime/', 'synthetic-user', 'synthetic-password')
                 evidence = inspect_modules(page, PROFILE)
                 self.assertEqual(classify(evidence, PROFILE)[0], expected)
@@ -91,6 +126,37 @@ class BrowserTests(unittest.TestCase):
             stable_tables(page, hold=0.5, budget=2)
         self.assertIn('none held still', str(restless.exception))
         ctx.close()
+
+    def test_a_grid_without_row_elements_is_read_from_cell_positions(self):
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        for modules, expected in ((ONE_MODULE, ('no', 'Only module 1 is configured')),
+                                  (TWO_MODULES, ('yes', 'Module 2: TS2 DR1 BIU'))):
+            with self.subTest(expected=expected):
+                page.set_content(maxtime(modules))
+                evidence = inspect_modules(page, GRID_PROFILE)
+                self.assertEqual(evidence[0], GRID_PROFILE['headers'])
+                self.assertEqual(evidence[1], ['1', 'Caltrans 332', 'Default'])
+                self.assertEqual(classify(evidence, GRID_PROFILE), expected)
+        ctx.close()
+
+    def test_the_io_modules_address_is_used_before_the_menu_walk(self):
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        login = ("<input id=u><input type=password>"
+                 "<button onclick=\"document.body.innerHTML='<h1>Home</h1>'\">Sign in</button>")
+        ctx.route('**/*', lambda route: route.fulfill(
+            body=maxtime(TWO_MODULES) if route.request.url.endswith('IOModules') else login,
+            content_type='text/html'))
+        navigate(page, 'http://192.0.2.1:52270/maxtime/', 'synthetic-user', 'synthetic-password')
+        self.assertTrue(page.url.endswith('/Controller/AdvancedIO/CabinetConfiguration/IOModules'))
+        self.assertEqual(classify(inspect_modules(page, GRID_PROFILE), GRID_PROFILE)[0], 'yes')
+        ctx.close()
+
+    def test_an_unfamiliar_module_type_names_itself(self):
+        answer, why = classify([GRID_PROFILE['headers'], ['1', 'Model 2070 Something', 'Default']], GRID_PROFILE)
+        self.assertEqual(answer, 'unknown')
+        self.assertIn('model 2070 something', why)
 
     def test_source_lookup_and_missing_folder_ids(self):
         ctx = self.browser.new_context()
