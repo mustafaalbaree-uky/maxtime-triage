@@ -128,6 +128,18 @@ class BrowserTests(unittest.TestCase):
         self.assertIn('none held still', str(restless.exception))
         ctx.close()
 
+    def test_a_header_mismatch_names_both_sets_of_headings(self):
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        page.set_content(maxtime(ONE_MODULE).replace('Fault Response', 'Fault Resp'))
+        with self.assertRaises(RuntimeError) as caught:
+            inspect_modules(page, GRID_PROFILE)
+        message = str(caught.exception)
+        self.assertIn('No table on the page carries the calibrated headers', message)
+        self.assertIn('Calibrated: IO Module | Type | Fault Response', message)
+        self.assertIn('Found: IO Module | Type | Fault Resp', message)
+        ctx.close()
+
     def test_a_grid_without_row_elements_is_read_from_cell_positions(self):
         ctx = self.browser.new_context()
         page = ctx.new_page()

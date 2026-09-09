@@ -452,7 +452,14 @@ def inspect_modules(page, profile):
     tables = stable_tables(page)
     matches = [t for t in tables if t['rows'][0] == profile['headers']]
     if len(matches) != 1:
-        raise RuntimeError('Module table is missing or ambiguous')
+        # Name what was on screen. "Missing or ambiguous" alone says nothing
+        # about which of the two happened, or what the headers actually were.
+        want = ' | '.join(profile['headers'])
+        seen = '; '.join(' | '.join(t['rows'][0])[:80] for t in tables) or 'no table at all'
+        raise RuntimeError(
+            (f'{len(matches)} tables carry the calibrated headers' if matches
+             else 'No table on the page carries the calibrated headers')
+            + f'. Calibrated: {want}. Found: {seen}')
     # Any visible pagination control makes an absence result unsafe.
     if any(frame.get_by_role('button', name=re.compile(r'^(?:next|next page|load more)$', re.I)).filter(visible=True).count()
            for frame in page.frames):
@@ -469,7 +476,7 @@ def main():
     ap.add_argument('--account-open', help='Text of the closed dropdown, clicked first to open the list')
     ap.add_argument('--profile', type=Path, default=Path('biu-profile.json'))
     ap.add_argument('--out', type=Path, default=Path('biu-results'))
-    ap.add_argument('--only', help='One signal ID')
+    ap.add_argument('--only', help='Signal IDs, comma separated')
     group = ap.add_mutually_exclusive_group()
     group.add_argument('--limit', type=int, default=1, help='Controllers to check (default: 1)')
     group.add_argument('--all', action='store_true', help='Process the whole exported worklist')
@@ -483,7 +490,8 @@ def main():
     worklist = read_worklist(args.csv)
     rows = worklist
     if args.only:
-        rows = [r for r in rows if r['id'] == args.only]
+        wanted = [i.strip() for i in args.only.split(',') if i.strip()]
+        rows = [r for r in rows if r['id'] in wanted]
     if not args.all:
         rows = rows[:args.limit]
     if not rows:
@@ -535,6 +543,13 @@ def main():
                         login_failed = not page.is_closed() and bool(page.locator('input[type=password]:visible').count())
                     except Exception:
                         login_failed = True  # A lost browser session should also stop the batch.
+                    if not login_failed:
+                        # Past the login and still failed, so the screen itself is
+                        # the evidence. Same rule: never capture a login form.
+                        try:
+                            page.screenshot(path=str(run / (row['id'] + '-failed.png')), full_page=True)
+                        except Exception:
+                            pass
                     record['biu'] = 'unknown'
                     record['reason'] = str(exc) if type(exc) is RuntimeError else type(exc).__name__ + ': login, navigation or read failed'
                 finally:

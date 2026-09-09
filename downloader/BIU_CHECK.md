@@ -196,6 +196,17 @@ It leaves out anything already answered, confirmed or not, and anything the
 script read but could not decide, since another visit would return the same
 unknown. Work through those on the page instead.
 
+A check that got past the login and still failed leaves a
+`<id>-failed.png` screenshot beside the results, so the screen it gave up on
+can be looked at afterwards. A login form is never captured.
+
+`--only` takes several IDs, comma separated, which is how to re-run a handful
+without exporting a fresh worklist:
+
+```
+py check_biu.py biu_worklist.csv --only 4110,4112,4114 --account-type "Profile Server" --account-open Controller
+```
+
 A run stops early only after **three login failures in a row**, which is what a
 wrong password looks like. A single controller that refuses the login is
 recorded, said out loud, and the batch carries on. `--stop-after N` changes it.
