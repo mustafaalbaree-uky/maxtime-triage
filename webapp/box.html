@@ -119,7 +119,7 @@
   <h1>MaxTime Box Triage</h1>
   <div class="sub">Clickbox configuration coverage, computed locally, nothing uploaded</div>
   <div class="spacer"></div>
-  <span class="sub">box.html 2026-09-09.2</span>
+  <span class="sub">box.html 2026-09-09.3</span>
   <a href="index.html">Timing triage</a>
   <button id="btnDemo">Load demo data</button>
   <button id="btnClear">Clear saved data</button>
@@ -658,8 +658,14 @@ function automationProposals(payload, check, found) {
     else if (!Array.isArray(r.evidence) || r.evidence.length < 2 ||
       !r.evidence.every(row => Array.isArray(row) && row.every(c => typeof c === "string")))
       skip = "No readable module evidence";
+    const readable = Array.isArray(r.evidence) && r.evidence.length >= 2 &&
+      r.evidence.every(row => Array.isArray(row) && row.every(c => typeof c === "string"));
+    let kind = "blocked";                       // Nothing can be decided from this row.
+    if (skip === "Already has a manual or imported answer") kind = "answered";
+    else if (!skip) kind = "ready";             // The script proposed an answer.
+    else if (skip === "Needs manual review" && readable) kind = "open";
     return { id, biu: r.biu, reason: S(r.reason), checked_at: S(r.checked_at),
-      evidence: Array.isArray(r.evidence) ? r.evidence : [], skip };
+      evidence: Array.isArray(r.evidence) ? r.evidence : [], skip, kind };
   });
 }
 
@@ -697,7 +703,17 @@ let state = {
   hideDone: store.get("hideDone", false),
 };
 let result = null, columns = null;
-let pendingAutomation = null;
+let pendingAutomation = null, automationChoice = {};
+
+function startReview(payload) {
+  automationProposals(payload, result.check, state.found);   // Throws on a bad file.
+  pendingAutomation = payload;
+  automationChoice = {};
+  for (const p of automationProposals(payload, result.check, state.found))
+    if (p.kind === "ready") automationChoice[p.id] = p.biu;
+}
+
+function endReview() { pendingAutomation = null; automationChoice = {}; loadedRun = ""; }
 let lookupId = "";
 
 function saveFound() { store.set("found", state.found); }
@@ -750,9 +766,7 @@ async function loadNewestRun() {
   try { file = await (await dir.getFileHandle("results.json")).getFile(); }
   catch (e) { toast("No results.json in " + label); return; }
   try {
-    const payload = JSON.parse(await file.text());
-    automationProposals(payload, result.check, state.found);
-    pendingAutomation = payload;
+    startReview(JSON.parse(await file.text()));
     loadedRun = label;
   } catch (e) { toast(S(e.message) || "Could not read that run"); return; }
   renderPanel();
@@ -1076,17 +1090,30 @@ function viewCheck(r) {
 function automationPreview() {
   if (!pendingAutomation) return "";
   const proposals = automationProposals(pendingAutomation, result.check, state.found);
-  const ready = proposals.filter(p => !p.skip).length;
+  const answered = proposals.filter(p => p.kind === "answered").length;
+  const listed = proposals.filter(p => p.kind !== "answered");
+  const chosen = listed.filter(p => automationChoice[p.id]).length;
+  const said = b => b === "yes" ? "BIU, box" : b === "no" ? "no BIU" : "needs review";
+  const pick = (p, biu, label) => `<button class="rbtn ${automationChoice[p.id] === biu
+    ? (biu === "yes" ? "on-yes" : biu === "no" ? "on-no" : "on") : ""}"
+    data-auto="${h(p.id)}" data-biu="${biu}">${label}</button>`;
   return `<div class="step"><b>Review automated IO module checks${loadedRun ? " from " + h(loadedRun) : ""}</b>
-    <p>${ready} answers can be applied. Existing answers are preserved. Unknown results stay open.
-    Compare the module evidence and the script's local screenshots with your manual checks.</p>
-    <table><thead><tr><th>ID</th><th>Proposed answer</th><th>Evidence / reason</th><th>Import</th></tr></thead>
-    <tbody>${proposals.map(p => `<tr><td>${h(p.id)}</td>
-      <td>${h(p.biu === "yes" ? "BIU, box" : p.biu === "no" ? "no BIU" : "needs review")}</td>
+    <p>Each row is yours to set. The script's answer is filled in already; change it or leave a row
+    open. Compare the module evidence and the script's local screenshots with what you see.</p>
+    ${answered ? `<p>${answered} already answered ${answered === 1 ? "row is" : "rows are"}
+      not listed. Change those on the check list itself.</p>` : ""}
+    <table><thead><tr><th>ID</th><th>The script said</th><th>Evidence / reason</th>
+    <th style="width:210px">Record</th></tr></thead>
+    <tbody>${listed.map(p => `<tr><td>${h(p.id)}</td>
+      <td>${h(said(p.biu))}</td>
       <td>${h(p.reason)}<br><small>${h(p.checked_at)}</small>
-      <details><summary>Module table</summary><pre>${h(p.evidence.map(row => Array.isArray(row) ? row.join(" | ") : "").join("\n"))}</pre></details></td>
-      <td>${h(p.skip || "Ready")}</td></tr>`).join("")}</tbody></table>
-    <button id="applyAutomation" class="primary" ${ready ? "" : "disabled"}>I reviewed these — apply ${ready} answers</button>
+      ${p.evidence.length ? `<details><summary>Module table</summary><pre>${
+        h(p.evidence.map(row => Array.isArray(row) ? row.join(" | ") : "").join("\n"))}</pre></details>` : ""}</td>
+      <td>${p.kind === "blocked" ? h(p.skip) : `<div class="res">
+        ${pick(p, "yes", "BIU, box")}${pick(p, "no", "no BIU")}${pick(p, "", "leave open")}
+      </div>`}</td></tr>`).join("")}</tbody></table>
+    <button id="applyAutomation" class="primary" ${chosen ? "" : "disabled"}>Apply ${chosen} ${
+      chosen === 1 ? "answer" : "answers"}</button>
     <button id="cancelAutomation">Dismiss</button>
     <p>BIU answers reveal the :57150 link. Download the box configuration and mark it saved yourself.</p>
   </div>`;
@@ -1338,25 +1365,38 @@ function wirePanel() {
     try {
       const file = autoInput.files[0];
       if (!file) return;
-      const payload = JSON.parse(await file.text());
-      automationProposals(payload, result.check, state.found);
-      pendingAutomation = payload;
+      startReview(JSON.parse(await file.text()));
+      loadedRun = S(file.name);
       renderPanel();
     } catch (e) { toast("Could not import: " + e.message); }
   };
+  for (const el of document.querySelectorAll("#panel [data-auto]"))
+    el.onclick = () => {
+      if (el.dataset.biu) automationChoice[el.dataset.auto] = el.dataset.biu;
+      else delete automationChoice[el.dataset.auto];
+      renderPanel();
+    };
   const apply = document.getElementById("applyAutomation");
   if (apply) apply.onclick = () => {
     const proposals = automationProposals(pendingAutomation, result.check, state.found);
-    for (const p of proposals.filter(p => !p.skip)) {
+    let n = 0;
+    for (const p of proposals) {
+      const choice = automationChoice[p.id];
+      if (p.kind === "answered" || p.kind === "blocked" || !choice) continue;
       const cur = state.found[p.id] || {};
-      state.found[p.id] = { ...cur, biu: p.biu, saved: false, evidence: p.evidence,
-        note: [cur.note, "Reviewed script check " + p.checked_at + ": " + p.reason].filter(Boolean).join("; ") };
+      // Only a proposal that was overruled is worth recording as a change.
+      const overruled = (p.biu === "yes" || p.biu === "no") && choice !== p.biu;
+      const note = "Reviewed script check " + p.checked_at + ": " + p.reason
+        + (overruled ? "; recorded as " + choice + " instead" : "");
+      state.found[p.id] = { ...cur, biu: choice, saved: false, evidence: p.evidence,
+        note: [cur.note, note].filter(Boolean).join("; ") };
+      n++;
     }
-    pendingAutomation = null; loadedRun = "";
-    saveFound(); refresh(); toast("Reviewed answers applied; box downloads remain manual");
+    endReview();
+    saveFound(); refresh(); toast(n + " answers recorded; box downloads remain manual");
   };
   const cancel = document.getElementById("cancelAutomation");
-  if (cancel) cancel.onclick = () => { pendingAutomation = null; loadedRun = ""; renderPanel(); };
+  if (cancel) cancel.onclick = () => { endReview(); renderPanel(); };
   const cid = document.getElementById("btnCopyIds");
   if (cid) cid.onclick = () => copyText(
     result.check.map(e => e.id).join("\n") + "\n", result.check.length + " IDs");

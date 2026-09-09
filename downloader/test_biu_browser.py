@@ -227,6 +227,49 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(page.evaluate('loadedRun'), '')
         ctx.close()
 
+    def test_each_reviewed_row_is_a_decision_that_can_be_changed(self):
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        page.goto((Path(__file__).resolve().parents[1] / 'webapp/box.html').as_uri())
+        page.evaluate('loadDemo()')
+        work = page.evaluate('result.check.map(e => ({id:String(e.id),maxtime_url:e.url}))')
+        evidence = [['Module', 'Type'], ['1', 'SIU']]
+
+        def review(answers):
+            page.evaluate('(p) => { startReview(p); renderPanel(); }', dict(schema=SCHEMA, results=[
+                dict(**w, biu=b, evidence=evidence, reason='r', checked_at='2026-09-09T12:00:00Z')
+                for w, b in zip(work, answers)]))
+
+        page.evaluate('(id) => setFound(id, {biu: "no"})', work[0]['id'])
+        review(('no', 'no', 'unknown'))
+        panel = page.locator('#panel')
+        self.assertIn('1 already answered row is not listed', panel.inner_text())
+        self.assertNotIn(work[0]['id'], panel.locator('.step table tbody').first.inner_text())
+        # The script's answer is filled in; an unknown starts blank.
+        self.assertEqual(page.evaluate('automationChoice'), {work[1]['id']: 'no'})
+
+        panel.locator(f'[data-auto="{work[1]["id"]}"][data-biu="yes"]').click()
+        panel.locator(f'[data-auto="{work[2]["id"]}"][data-biu="no"]').click()
+        panel.locator(f'[data-auto="{work[2]["id"]}"][data-biu=""]').click()
+        self.assertEqual(page.evaluate('automationChoice'), {work[1]['id']: 'yes'})
+        page.locator('#applyAutomation').click()
+
+        found = page.evaluate('state.found')
+        self.assertEqual(found[work[1]['id']]['biu'], 'yes')
+        self.assertIn('recorded as yes instead', found[work[1]['id']]['note'])
+        self.assertNotIn(work[2]['id'], found)  # Left open records nothing.
+        self.assertEqual(found[work[0]['id']]['biu'], 'no')  # The answer it already had.
+
+        # An unknown left open stays decidable on the next run.
+        review(('no', 'no', 'unknown'))
+        self.assertIn('2 already answered rows are not listed', panel.inner_text())
+        panel.locator(f'[data-auto="{work[2]["id"]}"][data-biu="no"]').click()
+        page.locator('#applyAutomation').click()
+        found = page.evaluate('state.found')
+        self.assertEqual(found[work[2]['id']]['biu'], 'no')
+        self.assertNotIn('instead', found[work[2]['id']]['note'])
+        ctx.close()
+
     def test_source_lookup_and_missing_folder_ids(self):
         ctx = self.browser.new_context()
         page = ctx.new_page()

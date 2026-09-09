@@ -161,9 +161,16 @@ again each time you open the page, because a browser will not hand a page a
 folder without a click. **change folder** points it somewhere else, and
 **Review script results** still takes a single `results.json` by hand.
 
-The preview names the run it loaded, and shows evidence and any skipped rows. Click **I reviewed these — apply**
-to accept the eligible proposals. This is a deliberate review step; importing
+The preview names the run it loaded. Every row is yours to set: the script's
+answer is filled in, and **BIU, box**, **no BIU** and **leave open** change it
+before anything is recorded. A row the script called `unknown` starts blank, so
+you can read its evidence and answer it there rather than going back to the
+controller. **Apply** records only the rows you left with an answer. Importing
 alone changes nothing.
+
+Rows that already have an answer are not listed. Change those on the check list
+itself, where the same three buttons sit on the row. An answer you record
+against the script's own proposal is noted as such.
 
 - `yes` acts like **BIU, box** and reveals the `:57150` link. Fetch and save the
   box file manually, then mark it saved as before.
