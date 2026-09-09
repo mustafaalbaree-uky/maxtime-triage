@@ -58,6 +58,11 @@ it row by row before confirming. Only rows on screen are read, so if a
 controller ever has more modules than fit the pane, scroll until all of them
 are visible before pressing Enter.
 
+The two columns are found by their headings, not by their position, so a
+cabinet that shows one column more or fewer than the one you calibrated on is
+still read. Both calibrated headings must appear exactly once, or the answer
+is `unknown`.
+
 Only type `COMPLETE` if it really contains every configured module: no paging,
 filters, collapsed modules or virtual scrolling. The first table row must be
 column headings, and each following row must represent one configured module,

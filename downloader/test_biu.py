@@ -37,6 +37,18 @@ class ClassificationTests(unittest.TestCase):
 
     def test_changed_headers(self):
         self.assertEqual(classify([['ID', 'Type'], ['1', 'SIU']], PROFILE)[0], 'unknown')
+        self.assertEqual(classify([['Module', 'Module'], ['1', 'SIU']], PROFILE)[0], 'unknown')
+
+    def test_columns_are_found_by_heading_not_by_position(self):
+        # A cabinet showing an extra column, a missing one, or the same two in
+        # another order is still readable; the headings are what is calibrated.
+        for rows in ([['Module', 'Type', 'Fault Response'], ['1', 'SIU', 'Default'],
+                      ['2', 'TS2 DR1 BIU', 'Default']],
+                     [['Port', 'Type', 'Module'], ['A', 'SIU', '1'],
+                      ['B', 'TS2 DR1 BIU', '2']]):
+            with self.subTest(rows=rows[0]):
+                self.assertEqual(classify(rows, PROFILE), ('yes', 'Module 2: TS2 DR1 BIU'))
+        self.assertEqual(classify([['Module', 'Type'], ['1', 'SIU']], PROFILE)[0], 'no')
 
     def test_url_validation(self):
         for url in ('file:///tmp/a', 'http://user:secret@192.0.2.1/', 'http://192.0.2.1:57150/'):

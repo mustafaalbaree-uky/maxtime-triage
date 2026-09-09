@@ -124,17 +124,38 @@ def read_worklist(path):
     return rows
 
 
+def column_headings(profile):
+    headers = profile['headers']
+    return (profile.get('module_header') or headers[profile['module_column']],
+            profile.get('type_header') or headers[profile['type_column']])
+
+
+def resolve_columns(header, profile):
+    """The two columns this rule needs, found by their headings. Cabinets differ
+    in how many columns they show, and a column we never read is not a reason to
+    refuse the two we do. Each heading must appear exactly once."""
+    found = []
+    for want in column_headings(profile):
+        hits = [i for i, cell in enumerate(header) if norm(cell) == norm(want)]
+        if len(hits) != 1:
+            return None
+        found.append(hits[0])
+    return None if found[0] == found[1] else tuple(found)
+
+
 def classify(rows, profile):
     """Never infer absence from a missing page/table, blank type or malformed row."""
-    if not rows or rows[0] != profile['headers']:
-        return 'unknown', 'Table headers changed; recalibrate'
+    columns = resolve_columns(rows[0], profile) if rows else None
+    if not columns:
+        return 'unknown', 'Module number or type column heading is missing; recalibrate'
+    module_column, type_column = columns
     modules = {}
     for row in rows[1:]:
-        if len(row) != len(profile['headers']):
+        if len(row) != len(rows[0]):
             return 'unknown', 'Incomplete or unexpected table row'
-        raw = norm(row[profile['module_column']])
+        raw = norm(row[module_column])
         match = re.fullmatch(r'(?:(?:io\s*)?module\s*)?#?\s*(\d+)', raw)
-        kind = norm(row[profile['type_column']])
+        kind = norm(row[type_column])
         if not match or not kind or kind in ('loading', 'loading...', '(select)', 'select', 'unknown', 'error', '-'):
             return 'unknown', 'Module number or selected type was unreadable'
         number = int(match[1])
@@ -431,6 +452,7 @@ def setup(page, row, path):
     if input('Type COMPLETE to confirm, otherwise press Enter to cancel: ') != 'COMPLETE':
         raise ValueError('Setup cancelled; no profile saved')
     profile = dict(headers=headers, module_column=module_col, type_column=type_col,
+                   module_header=headers[module_col], type_header=headers[type_col],
                    complete_table_confirmed=True, schema=SCHEMA,
                    observed_non_biu_types=sorted({norm(r[type_col]) for r in table['rows'][1:]
                                                  if len(r) == len(headers) and 'biu' not in norm(r[type_col])}))
@@ -450,15 +472,15 @@ def inspect_modules(page, profile):
     if not any(frame.get_by_text(IO_MARKER).filter(visible=True).count() for frame in page.frames):
         raise RuntimeError('IO Modules page marker missing')
     tables = stable_tables(page)
-    matches = [t for t in tables if t['rows'][0] == profile['headers']]
+    matches = [t for t in tables if resolve_columns(t['rows'][0], profile)]
     if len(matches) != 1:
         # Name what was on screen. "Missing or ambiguous" alone says nothing
         # about which of the two happened, or what the headers actually were.
-        want = ' | '.join(profile['headers'])
+        want = ' | '.join(column_headings(profile))
         seen = '; '.join(' | '.join(t['rows'][0])[:80] for t in tables) or 'no table at all'
         raise RuntimeError(
-            (f'{len(matches)} tables carry the calibrated headers' if matches
-             else 'No table on the page carries the calibrated headers')
+            (f'{len(matches)} tables carry both calibrated headings' if matches
+             else 'No table on the page carries both calibrated headings')
             + f'. Calibrated: {want}. Found: {seen}')
     # Any visible pagination control makes an absence result unsafe.
     if any(frame.get_by_role('button', name=re.compile(r'^(?:next|next page|load more)$', re.I)).filter(visible=True).count()
@@ -492,7 +514,7 @@ def main():
     if args.only:
         wanted = [i.strip() for i in args.only.split(',') if i.strip()]
         rows = [r for r in rows if r['id'] in wanted]
-    if not args.all:
+    if not args.all and not args.only:
         rows = rows[:args.limit]
     if not rows:
         available = ', '.join(r['id'] for r in worklist)

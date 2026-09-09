@@ -131,13 +131,26 @@ class BrowserTests(unittest.TestCase):
     def test_a_header_mismatch_names_both_sets_of_headings(self):
         ctx = self.browser.new_context()
         page = ctx.new_page()
-        page.set_content(maxtime(ONE_MODULE).replace('Fault Response', 'Fault Resp'))
+        page.set_content(maxtime(ONE_MODULE).replace('>Type<', '>Kind<'))
         with self.assertRaises(RuntimeError) as caught:
             inspect_modules(page, GRID_PROFILE)
         message = str(caught.exception)
-        self.assertIn('No table on the page carries the calibrated headers', message)
-        self.assertIn('Calibrated: IO Module | Type | Fault Response', message)
-        self.assertIn('Found: IO Module | Type | Fault Resp', message)
+        self.assertIn('No table on the page carries both calibrated headings', message)
+        self.assertIn('Calibrated: IO Module | Type', message)
+        self.assertIn('Found: IO Module | Kind | Fault Response', message)
+        ctx.close()
+
+    def test_a_cabinet_showing_fewer_columns_is_still_read(self):
+        """Some cabinets show IO Module and Type with no Fault Response column."""
+        ctx = self.browser.new_context()
+        page = ctx.new_page()
+        cell = lambda t: '<div style="%s">%s</div>' % (CELL, t)
+        page.set_content(maxtime(TWO_MODULES)
+                         .replace(cell('Fault Response'), '').replace(cell('Default'), '')
+                         .replace('grid-template-columns:160px 140px', 'grid-template-columns:160px'))
+        evidence = inspect_modules(page, GRID_PROFILE)
+        self.assertEqual(evidence[0], ['IO Module', 'Type'])
+        self.assertEqual(classify(evidence, GRID_PROFILE), ('yes', 'Module 2: TS2 DR1 BIU'))
         ctx.close()
 
     def test_a_grid_without_row_elements_is_read_from_cell_positions(self):
