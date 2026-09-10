@@ -108,6 +108,14 @@
   input.notebox { border: 1px solid var(--line); border-radius: 6px;
     padding: 3px 7px; font: inherit; font-size: 12.5px; width: 100%;
     max-width: 260px; margin-top: 4px; display: block; }
+  .props { margin-top: 6px; font-size: 11.5px; }
+  .props summary { cursor: pointer; color: var(--accent); }
+  .props .pline { display: flex; gap: 5px; align-items: baseline; margin-top: 4px; }
+  .props .plab { color: var(--muted); text-transform: uppercase; letter-spacing: .4px;
+    font-size: 10px; min-width: 46px; }
+  .props .pval { font: 11.5px ui-monospace, Consolas, monospace; flex: 1;
+    overflow-wrap: anywhere; }
+  .props button { padding: 1px 6px; font-size: 11px; border-radius: 5px; }
   .anom h3 { margin: 18px 0 6px; font-size: 14px; }
   .anom p.exp { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
   .mono { font: 12px ui-monospace, Consolas, monospace; }
@@ -700,6 +708,22 @@ function boxesToDownload(check, found) {
   });
 }
 
+/* The three Properties fields on the clickbox at :57150.
+   Name is the county code and the ID as the master sheet numbers them, so 076-4380.
+   Location is the intersection as the MaxTime links sheet spells it, which is the
+   wording already in the controller; the master sheet carries the GIS wording
+   ("52-IRVING RD") and is not used here. Description is the same on every device. */
+const BOX_DESCRIPTION = "KYTC D7";
+function boxProperties(e) {
+  const cid = S(e.county_id), id = S(e.id);
+  const main = S(e.main), side = S(e.side);
+  const name = /^\d{1,3}$/.test(cid) && /^\d{4}$/.test(id)
+    ? cid.padStart(3, "0") + "-" + id : "";
+  const location = main && side ? main + " at " + side : "";
+  return { name, location, description: BOX_DESCRIPTION,
+    missing: [!name && "CountyID", !location && "intersection"].filter(Boolean) };
+}
+
 /* ================= LOGIC-END ================= */
 
 /* ---------- storage and state ---------- */
@@ -1064,6 +1088,15 @@ function viewCheck(r) {
     const bx = e.box_url && f.biu === "yes"
       ? `<br><a href="${h(e.box_url)}" target="_blank" rel="noopener">:57150</a>` : "";
     const owed = f.biu === "yes" && !f.saved;   // A box whose file is not saved yet.
+    const pr = owed && e.box_url ? boxProperties(e) : null;
+    const props = !pr ? "" : `<details class="props"><summary>properties</summary>
+      ${pr.missing.length
+        ? `<div class="pline"><span class="flag">no ${h(pr.missing.join(" or "))} in the sheets</span></div>`
+        : [["Name", pr.name], ["Location", pr.location], ["Descr", pr.description]]
+            .map(([k, v]) => `<div class="pline"><span class="plab">${k}</span
+              ><span class="pval">${h(v)}</span
+              ><button class="pcopy" data-v="${h(v)}">copy</button></div>`).join("")}
+      </details>`;
     const noAnswer = !f.biu;                   // Failed, undecided, or never touched.
     return `<tr class="${owed ? "owed" : noAnswer ? "noanswer" : done ? "settled" : ""}" data-id="${h(e.id)}">
       <td><span class="chip">${h(e.id)}</span><br><span style="font-size:11.5px;color:#5b6b7b">row ${e.row}</span></td>
@@ -1072,7 +1105,7 @@ function viewCheck(r) {
       <td>${h(e.detection) || "<span style='color:#5b6b7b'>blank</span>"}</td>
       <td class="mono">${h(e.box_fr) || "&mdash;"}<br>${h(e.box_done) || "&mdash;"}</td>
       <td>${whyChips(e.why)}</td>
-      <td>${mt}${bx}</td>
+      <td>${mt}${bx}${props}</td>
       <td>
         <div class="res">
           <button class="rbtn ${f.biu === "yes" ? "on-yes" : ""}" data-id="${h(e.id)}" data-biu="yes">BIU, box</button>
@@ -1109,8 +1142,9 @@ function viewCheck(r) {
         the note. With no BIU answer on the row, the note is what the Box or
         Front rack column pastes.</li>
       <li>For a box, open the same IP at port <code>57150</code>, then
-        <code>Properties</code>. If Name, Location and Description are blank,
-        fill in the ID, the intersection, and KYTC District 7.</li>
+        <code>Properties</code>. Open <b>properties</b> on the row for the Name,
+        Location and Description that signal takes, with a copy button each.
+        Then <code>Save Device Properties</code> at the bottom of the panel.</li>
       <li><code>Export Configuration</code>, then put the file in the SharePoint
         clickbox configuration folder and tick the box here.</li>
     </ol>
@@ -1123,7 +1157,8 @@ function viewCheck(r) {
     <button id="btnCopyIds">Copy ID list</button>
     ${boxesToDownload(r.check, state.found).length
       ? `<button class="primary" id="btnCopyBoxes">Copy the ${
-          boxesToDownload(r.check, state.found).length} boxes to download</button>` : ""}
+          boxesToDownload(r.check, state.found).length} boxes to download</button>
+         <button id="btnBoxCsv">Export clickbox worklist</button>` : ""}
     <button id="btnAutoCsv">Export automation worklist</button>
     ${window.showDirectoryPicker ? `<button id="btnNewestRun">${resultsDir
       ? "Newest script run" : "Point at the results folder"}</button>` : ""}
@@ -1388,6 +1423,15 @@ function wirePanel() {
       result.check.map(e => [e.id, e.row, e.county, e.s1, e.s2, e.detection,
         e.box_fr, e.box_done, e.why.map(w => WHY_TEXT[w] || w).join("; "),
         e.url, e.box_url])));
+  for (const b of document.querySelectorAll(".pcopy"))
+    b.onclick = () => copyText(b.dataset.v, b.dataset.v);
+  const boxCsv = document.getElementById("btnBoxCsv");
+  if (boxCsv) boxCsv.onclick = () => downloadCSV("clickbox_worklist.csv",
+    [["id", "clickbox_url", "name", "location", "description"]].concat(
+      boxesToDownload(result.check, state.found).map(e => {
+        const p = boxProperties(e);
+        return [e.id, e.box_url, p.name, p.location, p.description];
+      })));
   const autoCsv = document.getElementById("btnAutoCsv");
   if (autoCsv) autoCsv.onclick = () => downloadCSV("biu_worklist.csv",
     [["id", "maxtime_url", "intersection"]].concat(

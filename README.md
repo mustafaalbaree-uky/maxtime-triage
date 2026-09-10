@@ -153,7 +153,11 @@ install: `python3 fetch_missing.py needs_download.csv`.
     downloader/fetch_missing.py  controller downloader
     downloader/probe_iomodules.py  read only IO module probe, one controller
     downloader/test_downloader.py  offline test against a mock controller
+    downloader/check_biu.py    reads the IO module table, many controllers
+    downloader/fetch_clickbox.py  reports what a clickbox Properties screen holds
     downloader/PROTOCOL.md     the two controller endpoints it uses
+    downloader/BIU_CHECK.md    work computer instructions for the BIU checker
+    downloader/CLICKBOX.md     work computer instructions for the clickbox tool
     tools/triage_lib.py        reference parsing and cross referencing logic
     tools/verify.py            builds mock listing and expected results
     tools/verify_box.py        runs box.html's own rules under node
@@ -175,3 +179,19 @@ Box configuration downloads remain manual. See the
 [work computer instructions](downloader/BIU_CHECK.md) for installation,
 calibration, validation and import. Real-controller navigation still needs the
 first work-network test; offline tests cover synthetic controller screens.
+
+## The clickbox properties, at port 57150
+
+Before a clickbox configuration can be exported, the device's Name, Location
+and Description have to be filled in. Two of the three are already in the
+sheets:
+Name is the county code and ID from the master sheet (`076-4380`), Location is
+the intersection as the links sheet spells it (`US 25 at KY 52 (IRVING RD)`),
+and Description is `KYTC D7` on every device. The box page shows all three on
+the row with a copy button each, and exports them as `clickbox_worklist.csv`.
+
+[`downloader/fetch_clickbox.py`](downloader/fetch_clickbox.py) currently has
+one mode, `--describe`, which opens one clickbox and reports what its
+Properties screen contains without changing anything. Filling, saving and
+exporting are written against what it finds, the same way the BIU checker was
+calibrated. See [CLICKBOX.md](downloader/CLICKBOX.md).

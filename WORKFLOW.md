@@ -143,10 +143,12 @@ Confirmed by the supervisor on 8 September 2026:
   `TS2 DR1 BIU` in IO module 2 means the signal has a clickbox.
 * A box means the detection column is Wavetronix even where the sheet still
   says Loops, and the box column becomes `BOX`. No BIU means `N/A`.
-* To fetch the file, open the same IP at port `57150`, then `Properties`. If
-  Name, Location and Description are blank they have to be filled in first:
-  the ID, the intersection, and KYTC District 7. Then
-  `Export Configuration`.
+* To fetch the file, open the same IP at port `57150`, then `Properties`. Name,
+  Location and Description have to be filled in first, then
+  `Save Device Properties` at the bottom of the panel, then
+  `Export Configuration`. The three values come out of the sheets and the row
+  shows them under **properties**, with a copy button each. See
+  `downloader/CLICKBOX.md`.
 
 ## Step 1: load the inputs
 
