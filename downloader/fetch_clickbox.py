@@ -25,6 +25,10 @@ from urllib.parse import urlsplit
 
 SCHEMA = 'maxtime-clickbox-v1'
 CLICKBOX_PORT = 57150
+# Under --out-dir: the configurations on their own, so the folder can be
+# selected whole and dragged into SharePoint without picking around the logs.
+FILES_SUBDIR = 'files'
+RUNS_SUBDIR = 'runs'
 # The three fields, and the words their labels are found by.
 WANTED = {'name': 'Name', 'location': 'Location', 'description': 'Description'}
 SAVE_TEXT = re.compile(r'\bsave\b', re.I)
@@ -448,7 +452,8 @@ def process_one(context, row, args, run):
         changed = ['%s was %r, now %r' % (WANTED[k], plan[k]['current'], typed[k])
                    for k in typed if plan[k]['action'] == 'replace']
         rec['note'] = '; '.join(changed)
-        path, why = export_config(page, frame, buttons, args.out_dir, row['id'])
+        path, why = export_config(page, frame, buttons,
+                                  args.out_dir / FILES_SUBDIR, row['id'])
         if path:
             rec['exported'] = str(path)
             print('  Saved %s' % path)
@@ -461,8 +466,9 @@ def process_one(context, row, args, run):
 
 
 def write_results(args, run, records):
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    path = args.out_dir / ('clickbox-run-%s.json' % run)
+    runs = args.out_dir / RUNS_SUBDIR
+    runs.mkdir(parents=True, exist_ok=True)
+    path = runs / ('clickbox-run-%s.json' % run)
     path.write_text(json.dumps({'schema': SCHEMA, 'run': run, 'results': records}, indent=2),
                     encoding='utf-8')
     return path
@@ -492,7 +498,8 @@ def main():
     ap.add_argument('--out', type=Path, default=Path('clickbox-diagnostic.json'),
                     help='Where --describe writes its report')
     ap.add_argument('--out-dir', type=Path, default=Path('clickbox-exports'),
-                    help='Folder the exported configurations land in')
+                    help='Holds %s (the configurations) and %s (what each run did)'
+                         % (FILES_SUBDIR, RUNS_SUBDIR))
     ap.add_argument('--browser', choices=['msedge', 'chrome', 'chromium'], default='msedge')
     ap.add_argument('--timeout', type=float, default=20,
                     help='Seconds to wait for a clickbox to answer (default: 20)')
@@ -530,7 +537,8 @@ def main():
                 return 0
             print('%d clickbox%s. Each one asks before anything is typed.'
                   % (len(rows), '' if len(rows) == 1 else 'es'))
-            print('Exports land in %s' % args.out_dir.resolve())
+            print('Configurations land in %s' % (args.out_dir / FILES_SUBDIR).resolve())
+            print('The record of the run goes in %s' % (args.out_dir / RUNS_SUBDIR).resolve())
             records = []
             for row in rows:
                 rec = process_one(context, row, args, run)

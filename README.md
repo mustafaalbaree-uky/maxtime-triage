@@ -195,7 +195,8 @@ three fields and exports the configuration, one device at a time and only after
 you answer `y` for that signal. A field already holding something different is
 called out and needs its own `y`, and what it replaced is recorded. Nothing
 else on that screen is touched, and a device that does not show the value back
-after saving is reported rather than exported. Exports land in one folder,
-named by the device; moving them into SharePoint stays manual. `--describe`
+after saving is reported rather than exported. Configurations land in one
+folder of their own, named by the device, with the record of each run kept in a
+sibling folder so the first can be dragged into SharePoint whole. `--describe`
 opens a device and reports its screen without changing anything, which is how
 the rest was written. See [CLICKBOX.md](downloader/CLICKBOX.md).

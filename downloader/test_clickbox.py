@@ -4,8 +4,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from fetch_clickbox import (PROPERTIES_TAB, clickbox_origin, export_config,
-                            fill_and_save, guess, plan_row, read_worklist, selector)
+from fetch_clickbox import (FILES_SUBDIR, PROPERTIES_TAB, RUNS_SUBDIR,
+                            clickbox_origin, export_config, fill_and_save, guess,
+                            plan_row, read_worklist, selector, write_results)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
 GOOD = HEAD + '4380,http://192.0.2.1:57150/,076-4380,US 25 at KY 52 (IRVING RD),KYTC D7\n'
@@ -307,6 +308,30 @@ class ExportTests(unittest.TestCase):
         path, why = export_config(FakePage(None), FakeFrame({}), {}, Path('.'), '4030')
         self.assertIsNone(path)
         self.assertIn('no Export Configuration', why)
+
+
+class Args:
+    def __init__(self, out_dir):
+        self.out_dir = out_dir
+
+
+class OutputLayoutTests(unittest.TestCase):
+    def test_configurations_and_run_records_do_not_share_a_folder(self):
+        # The configurations folder gets selected whole and dragged into
+        # SharePoint, so nothing else may be sitting in it.
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / 'clickbox-exports'
+            export_config(FakePage(FakeDownload('config.cbx')), FakeFrame({}),
+                          ExportTests.BUTTONS, out / FILES_SUBDIR, '4030')
+            written = write_results(Args(out), '20260910T190000Z',
+                                    [dict(id='4030', exported='x', skipped='',
+                                          error='', note='')])
+            self.assertEqual([p.name for p in (out / FILES_SUBDIR).iterdir()],
+                             ['config.cbx'])
+            self.assertEqual([p.suffix for p in (out / RUNS_SUBDIR).iterdir()], ['.json'])
+            self.assertEqual(written.parent.name, RUNS_SUBDIR)
+            self.assertEqual(sorted(p.name for p in out.iterdir()),
+                             [FILES_SUBDIR, RUNS_SUBDIR])
 
 
 if __name__ == '__main__':

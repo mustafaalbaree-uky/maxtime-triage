@@ -76,9 +76,19 @@ Type y to REPLACE and save, then export, n to skip this signal, q to stop:
 
 Answering `y` types the three fields, presses **Save Device Properties**, reads
 the three back to prove the device kept them, then presses **Export
-Configuration** and saves whatever it sends into `clickbox-exports`. The file
-keeps the name the device gives it; a second file of the same name is numbered
-rather than overwritten. Moving them into SharePoint stays manual.
+Configuration** and saves whatever it sends. The file keeps the name the device
+gives it; a second file of the same name is numbered rather than overwritten.
+Moving them into SharePoint stays manual.
+
+```
+clickbox-exports/
+  files/    the configurations, and nothing else
+  runs/     clickbox-run-<stamp>.json, what each run did
+```
+
+The configurations sit on their own so that folder can be selected whole and
+dragged into the SharePoint clickbox configuration folder. `--out-dir` moves
+the pair.
 
 Nothing else on that screen is touched. The IP address, subnet mask, default
 gateway, Ethernet control port and the BIU and sensor checkboxes sit on the
@@ -88,9 +98,9 @@ If the device does not show a value back after saving, it is reported and the
 export is not attempted, because an export of a device that did not take the
 change is a file that says the wrong thing.
 
-At the end the run lists what happened per signal, names anything it
-overwrote, and writes `clickbox-exports/clickbox-run-<stamp>.json`. Overwritten
-values are worth pasting into that row's note in box.html.
+At the end the run lists what happened per signal, names anything it overwrote,
+and writes the run record. Overwritten values are worth pasting into that row's
+note in box.html.
 
 `--limit` defaults to 1, so the first run of a session is one device unless you
 ask for more. `--timeout` is how long a clickbox gets to answer, 20 seconds by
