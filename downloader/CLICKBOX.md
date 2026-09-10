@@ -125,8 +125,16 @@ The first real read, on a Wavetronix Click 656 running firmware 1.2.0:
 * **Export Configuration is a plain footer link**, not a button:
   `Main | Admin | Export Configuration | Import Configuration | Upgrade | About`.
   The first version of this tool looked only for buttons and missed it.
-* The Properties screen is served at `/` and the top tabs (PROPERTIES, SENSORS,
-  CHANNELS, VERIFICATION, HEALTH, GRAPHS) do not change the path.
+* **The device lands on Health, not Properties, and the top tabs are not
+  links.** PROPERTIES, SENSORS, CHANNELS, VERIFICATION, HEALTH and GRAPHS carry
+  no href, no role and no id, so they appear in no list of links and there is
+  no path to navigate to. The only handle on them is their text, so the script
+  clicks the word `Properties`, anchored so that neither the `Device Properties`
+  heading nor the `Save Device Properties` control can be hit instead.
+* The first version assumed whatever screen the device opened on was the right
+  one, because during the describe pass a person had already clicked
+  PROPERTIES by hand. It reported "no Name, Location and Description on any
+  screen" on every device.
 * The same screen carries the device's IP address, subnet mask, default gateway,
   Ethernet control port and the BIU and sensor port checkboxes. The fill step
   touches the three properties and nothing else.

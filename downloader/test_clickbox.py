@@ -4,8 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from fetch_clickbox import (clickbox_origin, export_config, fill_and_save, guess,
-                            plan_row, read_worklist, selector)
+from fetch_clickbox import (PROPERTIES_TAB, clickbox_origin, export_config,
+                            fill_and_save, guess, plan_row, read_worklist, selector)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
 GOOD = HEAD + '4380,http://192.0.2.1:57150/,076-4380,US 25 at KY 52 (IRVING RD),KYTC D7\n'
@@ -221,6 +221,23 @@ class PlanTests(unittest.TestCase):
     def test_surrounding_space_on_the_device_is_not_a_difference(self):
         p = plan_row({**FIELDS, 'description': field(id='d', value='  KYTC D7 ')}, ROW)
         self.assertEqual(p['description']['action'], 'ok')
+
+
+class PropertiesTabTests(unittest.TestCase):
+    # Getting to Properties means clicking the word, the top tabs being neither
+    # links nor anything with a role. Two other things on that same screen say
+    # "Properties" and clicking either would be wrong: the heading, and the
+    # save control.
+    def test_matches_the_tab(self):
+        for text in ('PROPERTIES', 'Properties', ' properties '):
+            with self.subTest(text=text):
+                self.assertTrue(PROPERTIES_TAB.match(text))
+
+    def test_never_matches_the_heading_or_the_save_control(self):
+        for text in ('Device Properties', 'Save Device Properties',
+                     'Properties and Settings', 'Import Configuration'):
+            with self.subTest(text=text):
+                self.assertIsNone(PROPERTIES_TAB.match(text))
 
 
 class SelectorTests(unittest.TestCase):

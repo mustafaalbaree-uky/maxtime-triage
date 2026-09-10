@@ -100,6 +100,15 @@ DESCRIBE_JS = r"""() => {
  });
  const tabs = Array.from(document.querySelectorAll('[role=tab],.tab,.nav-link,li>a')).filter(visible).slice(0, 30)
    .map(e => cut(e.textContent, 40)).filter(Boolean);
+ // The Click 656's top tabs are not links and carry no role, so nothing above
+ // finds them. What they do have is a pointer cursor.
+ const clickables = Array.from(document.querySelectorAll('body *')).filter(e => {
+   if (!visible(e) || e.children.length > 1) return false;
+   const t = cut(e.textContent, 40);
+   if (!t || t.length > 40) return false;
+   try { return getComputedStyle(e).cursor === 'pointer'; } catch (err) { return false; }
+ }).slice(0, 30).map(e => ({tag: e.tagName.toLowerCase(), id: cut(e.id, 40),
+   cls: cls(e), text: cut(e.textContent, 40)}));
  return {
    route: cut((location.hash || location.pathname).split('?')[0], 80),  // names the screen; the host is left out on purpose
    title: cut(document.title, 80),
@@ -109,7 +118,7 @@ DESCRIBE_JS = r"""() => {
             button: document.querySelectorAll('button').length,
             table: document.querySelectorAll('table').length,
             frame: document.querySelectorAll('iframe,frame').length},
-   fields, buttons, tabs,
+   fields, buttons, tabs, clickables,
    text: Array.from(document.querySelectorAll('body *')).filter(e => !e.children.length && visible(e) &&
      (e.textContent || '').trim() && (e.textContent || '').trim().length <= 80).slice(0, 40).map(e => cut(e.textContent, 80)),
  };
@@ -194,6 +203,12 @@ def show(report, row):
     for b in report['buttons']:
         print('  %-28s %-8s %s%s' % (b['text'] or b['id'] or b['cls'], b['tag'],
                                      b.get('href') or '', ' disabled' if b['disabled'] else ''))
+    if report.get('clickables'):
+        # The top tabs are here and nowhere else: no link, no role, just a
+        # pointer cursor. This is what says how to reach Properties.
+        print('\nOther things that can be clicked:')
+        for c in report['clickables']:
+            print('  %-28s %-8s %s' % (c['text'], c['tag'], c['cls']))
 
     found, buttons = guess(report)
     print('\nBest guess at what the fill step needs:')
@@ -218,10 +233,13 @@ def show(report, row):
     return found, buttons
 
 
-def describe(page, row, path):
-    page.goto(row['clickbox_url'], wait_until='domcontentloaded')
+def describe(page, row, path, timeout_ms=20000):
+    frame, _, found, _ = open_properties(page, row['clickbox_url'], timeout_ms)
     print('\nThe browser has opened %s at port %d.' % (row['id'], CLICKBOX_PORT))
-    print('Sign in if it asks, then open the Properties tab. Change nothing.')
+    if frame and len(found) == 3:
+        print('It found the Properties screen on its own.')
+    else:
+        print('It could not get to Properties by itself. Open that tab by hand.')
     print('This script types nothing and presses no Save, Apply or Export.')
     reports = []
     while input('\nPress Enter to describe the screen, or type QUIT: ').strip().upper() != 'QUIT':
@@ -265,6 +283,44 @@ def read_screen(page):
         found, buttons = guess(report)
         if len(found) == 3 and all(selector(f) for f in found.values()):
             return frame, report, found, buttons
+    return None, None, {}, {}
+
+
+PROPERTIES_TAB = re.compile(r'^\s*propert(y|ies)\s*$', re.I)
+
+
+def open_properties(page, url, timeout_ms):
+    """Get to the Properties screen.
+
+    The Click 656 lands on Health, and its top tabs are neither links nor
+    anything carrying a role, so there is no path to navigate to and no
+    selector to rely on. The word itself is what gets clicked. `^properties$`
+    is deliberately anchored: 'Device Properties' is the heading and
+    'Save Device Properties' is the save control, and neither may be hit.
+    """
+    for path in ('', '/device.asp'):
+        try:
+            page.goto(url.rstrip('/') + path, wait_until='domcontentloaded',
+                      timeout=timeout_ms)
+        except Exception:
+            continue
+        try:
+            page.wait_for_load_state('networkidle', timeout=6000)
+        except Exception:
+            pass
+        page.wait_for_timeout(800)
+        got = read_screen(page)
+        if got[0]:
+            return got
+        for frame in page.frames:
+            try:
+                frame.get_by_text(PROPERTIES_TAB).first.click(timeout=4000)
+            except Exception:
+                continue
+            frame.wait_for_timeout(1200)
+            got = read_screen(page)
+            if got[0]:
+                return got
     return None, None, {}, {}
 
 
@@ -363,26 +419,11 @@ def process_one(context, row, args, run):
                exported='', skipped='', error='', note='')
     page = context.new_page()
     try:
-        try:
-            page.goto(row['clickbox_url'], wait_until='domcontentloaded',
-                      timeout=int(args.timeout * 1000))
-        except Exception as exc:
-            rec['error'] = 'could not be reached (%s)' % type(exc).__name__
-            return rec
-        frame, report, found, buttons = read_screen(page)
+        frame, report, found, buttons = open_properties(
+            page, row['clickbox_url'], int(args.timeout * 1000))
         if not frame:
-            # The landing screen is not always the properties one.
-            for path in ('/device.asp', '/'):
-                try:
-                    page.goto(row['clickbox_url'].rstrip('/') + path,
-                              wait_until='domcontentloaded', timeout=int(args.timeout * 1000))
-                except Exception:
-                    continue
-                frame, report, found, buttons = read_screen(page)
-                if frame:
-                    break
-        if not frame:
-            rec['error'] = 'no Name, Location and Description on any screen'
+            rec['error'] = ('could not reach the Properties screen, or it does not '
+                            'carry Name, Location and Description')
             return rec
         if not buttons.get('save'):
             rec['error'] = 'no Save Device Properties on this screen'
@@ -485,7 +526,7 @@ def main():
                 print('Signal %s. The proposal from the sheets is:' % row['id'])
                 for key, word in WANTED.items():
                     print('  %-12s %s' % (word, row[key]))
-                describe(context.new_page(), row, args.out)
+                describe(context.new_page(), row, args.out, int(args.timeout * 1000))
                 return 0
             print('%d clickbox%s. Each one asks before anything is typed.'
                   % (len(rows), '' if len(rows) == 1 else 'es'))
