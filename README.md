@@ -190,8 +190,12 @@ the intersection as the links sheet spells it (`US 25 at KY 52 (IRVING RD)`),
 and Description is `KYTC D7` on every device. The box page shows all three on
 the row with a copy button each, and exports them as `clickbox_worklist.csv`.
 
-[`downloader/fetch_clickbox.py`](downloader/fetch_clickbox.py) currently has
-one mode, `--describe`, which opens one clickbox and reports what its
-Properties screen contains without changing anything. Filling, saving and
-exporting are written against what it finds, the same way the BIU checker was
-calibrated. See [CLICKBOX.md](downloader/CLICKBOX.md).
+[`downloader/fetch_clickbox.py`](downloader/fetch_clickbox.py) fills those
+three fields and exports the configuration, one device at a time and only after
+you answer `y` for that signal. A field already holding something different is
+called out and needs its own `y`, and what it replaced is recorded. Nothing
+else on that screen is touched, and a device that does not show the value back
+after saving is reported rather than exported. Exports land in one folder,
+named by the device; moving them into SharePoint stays manual. `--describe`
+opens a device and reports its screen without changing anything, which is how
+the rest was written. See [CLICKBOX.md](downloader/CLICKBOX.md).

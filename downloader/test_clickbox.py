@@ -1,9 +1,11 @@
 """Synthetic-only tests: python -m unittest discover -s downloader -p test_clickbox.py."""
+import contextlib
 from pathlib import Path
 import tempfile
 import unittest
 
-from fetch_clickbox import clickbox_origin, guess, read_worklist
+from fetch_clickbox import (clickbox_origin, export_config, fill_and_save, guess,
+                            plan_row, read_worklist, selector)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
 GOOD = HEAD + '4380,http://192.0.2.1:57150/,076-4380,US 25 at KY 52 (IRVING RD),KYTC D7\n'
@@ -154,6 +156,140 @@ class GuessTests(unittest.TestCase):
         self.assertEqual(found, {})
         self.assertIsNone(buttons['save'])
         self.assertIsNone(buttons['export'])
+
+
+
+class FakeFrame:
+    """Enough of a Playwright frame to prove what does and does not get touched."""
+
+    def __init__(self, values, saves=True):
+        self.values, self.saves = dict(values), saves
+        self.filled, self.clicked = [], []
+
+    def fill(self, sel, value):
+        self.filled.append((sel, value))
+        if self.saves:
+            self.values[sel] = value
+
+    def click(self, sel):
+        self.clicked.append(sel)
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def input_value(self, sel):
+        return self.values.get(sel, '')
+
+
+class FakePage:
+    def __init__(self, download=None):
+        self.download = download
+
+    @contextlib.contextmanager
+    def expect_download(self, timeout=None):
+        if self.download is None:
+            raise TimeoutError('no download')
+        yield self
+
+    @property
+    def value(self):
+        return self.download
+
+
+class FakeDownload:
+    def __init__(self, name):
+        self.suggested_filename = name
+
+    def save_as(self, path):
+        Path(path).write_bytes(b'config')
+
+
+FIELDS = {'name': field(id='deviceName', value=''),
+          'location': field(id='deviceLocation', value='OLD PLACE'),
+          'description': field(id='deviceDescription', value='KYTC D7')}
+ROW = {'id': '4030', 'name': '009-4030', 'location': 'US 68X at KY 1678',
+       'description': 'KYTC D7'}
+
+
+class PlanTests(unittest.TestCase):
+    def test_empty_fills_wrong_replaces_same_is_left_alone(self):
+        p = plan_row(FIELDS, ROW)
+        self.assertEqual(p['name']['action'], 'fill')
+        self.assertEqual(p['location']['action'], 'replace')
+        self.assertEqual(p['description']['action'], 'ok')
+
+    def test_surrounding_space_on_the_device_is_not_a_difference(self):
+        p = plan_row({**FIELDS, 'description': field(id='d', value='  KYTC D7 ')}, ROW)
+        self.assertEqual(p['description']['action'], 'ok')
+
+
+class SelectorTests(unittest.TestCase):
+    def test_a_button_carries_no_name_and_must_not_raise(self):
+        self.assertEqual(selector(button('Save', tag='input')), '')
+        self.assertEqual(selector({'tag': 'input', 'id': 'btnSaveDevice'}), '#btnSaveDevice')
+
+
+class FillTests(unittest.TestCase):
+    def setUp(self):
+        self.buttons = {'save': dict(tag='input', id='btnSaveDevice', cls='',
+                                     text='Save Device Properties', href='', disabled=False)}
+
+    def test_only_the_fields_that_need_changing_are_typed_into(self):
+        frame = FakeFrame({'#deviceName': '', '#deviceLocation': 'OLD PLACE',
+                           '#deviceDescription': 'KYTC D7'})
+        typed, after = fill_and_save(frame, FIELDS, plan_row(FIELDS, ROW), self.buttons)
+        self.assertEqual([s for s, _ in frame.filled], ['#deviceName', '#deviceLocation'])
+        self.assertEqual(set(typed), {'name', 'location'})
+        self.assertEqual(after['name'], '009-4030')
+        self.assertEqual(frame.clicked, ['#btnSaveDevice'])
+
+    def test_nothing_to_change_means_save_is_never_pressed(self):
+        same = {k: field(id='device' + k, value=ROW[k]) for k in ROW if k != 'id'}
+        frame = FakeFrame({})
+        typed, _ = fill_and_save(frame, same, plan_row(same, ROW), self.buttons)
+        self.assertEqual(typed, {})
+        self.assertEqual(frame.clicked, [])
+
+    def test_a_device_that_does_not_keep_the_value_is_caught_by_reading_back(self):
+        frame = FakeFrame({'#deviceName': '', '#deviceLocation': 'OLD PLACE',
+                           '#deviceDescription': 'KYTC D7'}, saves=False)
+        typed, after = fill_and_save(frame, FIELDS, plan_row(FIELDS, ROW), self.buttons)
+        self.assertNotEqual(after['name'], typed['name'])
+
+
+class ExportTests(unittest.TestCase):
+    BUTTONS = {'export': button('Export Configuration', tag='a', href='/')}
+
+    def test_the_download_lands_in_the_output_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / 'exports'
+            page = FakePage(FakeDownload('click_656_config.cbx'))
+            path, why = export_config(page, FakeFrame({}), self.BUTTONS, out, '4030')
+            self.assertEqual(why, '')
+            self.assertTrue(path.exists())
+            self.assertEqual(path.name, 'click_656_config.cbx')
+
+    def test_a_second_export_of_the_same_name_does_not_overwrite_the_first(self):
+        # The device names these itself, so two signals can send the same name.
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / 'exports'
+            for _ in range(2):
+                export_config(FakePage(FakeDownload('config.cbx')), FakeFrame({}),
+                              self.BUTTONS, out, '4030')
+            self.assertEqual(sorted(p.name for p in out.iterdir()),
+                             ['config (1).cbx', 'config.cbx'])
+
+    def test_no_download_is_reported_rather_than_hanging(self):
+        with tempfile.TemporaryDirectory() as d:
+            path, why = export_config(FakePage(None), FakeFrame({}), self.BUTTONS,
+                                      Path(d), '4030')
+            self.assertIsNone(path)
+            self.assertIn('no download', why)
+
+    def test_a_missing_export_link_is_reported(self):
+        path, why = export_config(FakePage(None), FakeFrame({}), {}, Path('.'), '4030')
+        self.assertIsNone(path)
+        self.assertIn('no Export Configuration', why)
 
 
 if __name__ == '__main__':

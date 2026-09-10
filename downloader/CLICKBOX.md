@@ -34,32 +34,84 @@ id,clickbox_url,name,location,description
 A signal whose sheets cannot produce a Name or a Location is not put in that
 file, and the row says which of the two is missing instead.
 
-## What the script does so far
-
-`fetch_clickbox.py --describe` opens one clickbox, waits while you bring up
-Properties, and writes down what the screen contains. **It changes nothing**:
-it types into no field and presses no Save, Apply or Export.
-
-This exists because the clickbox UI is not available on the machine the tool
-was written on, exactly as with `check_biu.py`. Filling, saving and exporting
-are written against what this reports rather than guessed at.
+## Running it
 
 ```
 py -m pip install "playwright>=1.51,<2"
-py fetch_clickbox.py clickbox_worklist.csv --describe --only 4380
+py fetch_clickbox.py clickbox_worklist.csv              one clickbox
+py fetch_clickbox.py clickbox_worklist.csv --only 4030  one named signal
+py fetch_clickbox.py clickbox_worklist.csv --all        the whole worklist
 ```
 
 Add `--browser chromium` if Edge cannot be controlled on your computer, after
 `py -m playwright install chromium`. On Mac or Linux use `python3` for `py`.
 
-It prints every field on screen with its labels and what it currently holds,
-every button, and then its best guess at which control is Name, Location and
-Description, which button is Save Device Properties, and which is Export
-Configuration. For each of the three it says whether the field is empty, agrees
-with the proposal, or differs from it.
+Every device asks before anything is typed:
 
-Press Enter again after moving to another tab to describe that screen too.
-Type `QUIT` to finish.
+```
+====================================================================
+Signal 4030
+  Name         (empty)                            <- would fill in
+               009-4030
+  Location     (empty)                            <- would fill in
+               US 68X at KY 1678 CLINTONVILLE
+  Description  (empty)                            <- would fill in
+               KYTC D7
+====================================================================
+Type y to fill in, save, then export, n to skip this signal, q to stop:
+```
+
+A field already holding something different is called out on its own:
+
+```
+!! 2 fields already filled in and DIFFERENT from the sheets.
+  !!Name       device says '076-4030'
+               sheets say  '009-4030'
+  !!Location   device says 'US 68 AT 1678'
+               sheets say  'US 68X at KY 1678 CLINTONVILLE'
+  Description  KYTC D7                            already correct
+====================================================================
+Type y to REPLACE and save, then export, n to skip this signal, q to stop:
+```
+
+Answering `y` types the three fields, presses **Save Device Properties**, reads
+the three back to prove the device kept them, then presses **Export
+Configuration** and saves whatever it sends into `clickbox-exports`. The file
+keeps the name the device gives it; a second file of the same name is numbered
+rather than overwritten. Moving them into SharePoint stays manual.
+
+Nothing else on that screen is touched. The IP address, subnet mask, default
+gateway, Ethernet control port and the BIU and sensor checkboxes sit on the
+same form and are never typed into.
+
+If the device does not show a value back after saving, it is reported and the
+export is not attempted, because an export of a device that did not take the
+change is a file that says the wrong thing.
+
+At the end the run lists what happened per signal, names anything it
+overwrote, and writes `clickbox-exports/clickbox-run-<stamp>.json`. Overwritten
+values are worth pasting into that row's note in box.html.
+
+`--limit` defaults to 1, so the first run of a session is one device unless you
+ask for more. `--timeout` is how long a clickbox gets to answer, 20 seconds by
+default; one that does not answer is recorded and the run moves on.
+
+## Looking without touching
+
+`fetch_clickbox.py --describe` opens one clickbox and reports what its
+Properties screen contains. **It changes nothing**: it types into no field and
+presses no Save, Apply or Export. It is how the run loop above was written,
+the device UI not being available on the machine it came from.
+
+```
+py fetch_clickbox.py clickbox_worklist.csv --describe --only 4030
+```
+
+It prints every field with its labels and current contents, every button and
+link with its path, and its best guess at which control is which. Press Enter
+again after moving to another tab to describe that screen too, or `QUIT` to
+finish. It writes `clickbox-diagnostic.json`, which holds the screen structure
+and the field labels, and no password, address or cookie.
 
 ## What one Click 656 reported, 10 Sep 2026
 
@@ -79,32 +131,20 @@ The first real read, on a Wavetronix Click 656 running firmware 1.2.0:
   Ethernet control port and the BIU and sensor port checkboxes. The fill step
   touches the three properties and nothing else.
 
-## What to send back
+## If a device does not look like the Click 656
 
-`clickbox-diagnostic.json`, written next to the script. It holds the screen
-structure, the field labels, and what the three properties currently say.
+Run `--describe` on it and send `clickbox-diagnostic.json`. It holds the screen
+structure, the field labels, and what the three properties currently say, and
+no password, controller address or cookie. Password and hidden fields are named
+but never read, and the address is left out of the file deliberately so it can
+be sent.
 
-It does not hold a password, a controller address, or a cookie. Password and
-hidden fields are named but never read, and the address is left out of the file
-deliberately so it can be sent.
-
-## What comes next
-
-Once the screen is known, the run loop is: open each clickbox in the worklist,
-read the three fields, and
-
-* **all three already correct**: nothing to do, move on.
-* **empty**: show what would go in, wait for `y`.
-* **filled but different**: say so loudly, show both, wait for `y`. Approving
-  records what it was and what it became.
-
-Then `Save Device Properties`, then `Export Configuration`, with the file
-landing in an output folder. Moving it into the SharePoint clickbox
-configuration folder stays manual.
+The run refuses to touch a device whose screen does not carry all three fields
+and a Save Device Properties control. It says so and moves on.
 
 ## The two worklists are not interchangeable
 
 `biu_worklist.csv` carries `maxtime_url` and drives `check_biu.py`, which only
 reads. `clickbox_worklist.csv` carries `clickbox_url` and drives this, which
-will eventually write to the device. Each script refuses the other's file, and
+types into the device. Each script refuses the other's file, and
 refuses a URL on the wrong port.

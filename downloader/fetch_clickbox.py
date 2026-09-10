@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Look at a clickbox Properties screen and write down what is on it.
+"""Fill a clickbox's Name, Location and Description, then export its configuration.
 
-This run changes nothing on the device. It presses no Save, no Apply and no
-Export, and it types into no field. It is the calibration half of the clickbox
-tool: the device UI does not exist on the machine this was written on, so the
-fill and export step is written against what this reports rather than guessed.
+Every device asks first. The three values come from the sheets by way of
+box.html, and nothing is typed until you answer y for that signal. A field
+already holding something different is called out and needs its own y. No
+control other than those three and Save Device Properties is ever touched.
 
-See CLICKBOX.md.
+    py fetch_clickbox.py clickbox_worklist.csv                 one clickbox
+    py fetch_clickbox.py clickbox_worklist.csv --only 4030     one named signal
+    py fetch_clickbox.py clickbox_worklist.csv --all           the whole worklist
 
-    py fetch_clickbox.py clickbox_worklist.csv --describe --only 4380
+--describe changes nothing at all: it opens one device and reports what its
+Properties screen contains. That is how this was written, the device UI not
+being available on the machine it came from. See CLICKBOX.md.
 """
 import argparse
 import csv
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
@@ -20,7 +25,7 @@ from urllib.parse import urlsplit
 
 SCHEMA = 'maxtime-clickbox-v1'
 CLICKBOX_PORT = 57150
-# What the fill step will be looking for, once it exists.
+# The three fields, and the words their labels are found by.
 WANTED = {'name': 'Name', 'location': 'Location', 'description': 'Description'}
 SAVE_TEXT = re.compile(r'\bsave\b', re.I)
 SAVE_EXACT = re.compile(r'save\s+device\s+properties', re.I)
@@ -241,45 +246,260 @@ def describe(page, row, path):
         print('properties currently say. No password, no address, no cookies.')
 
 
+def selector(f):
+    """A way back to a control the report found."""
+    if f.get('id'):
+        return '#' + re.sub(r'([^\w-])', r'\\\1', f['id'])
+    if f.get('name'):                       # buttons carry no name; fields do
+        return '%s[name="%s"]' % (f['tag'], f['name'])
+    return ''
+
+
+def read_screen(page):
+    """The frame holding the three properties, and what it reported."""
+    for frame in page.frames:
+        try:
+            report = frame.evaluate(DESCRIBE_JS)
+        except Exception:
+            continue
+        found, buttons = guess(report)
+        if len(found) == 3 and all(selector(f) for f in found.values()):
+            return frame, report, found, buttons
+    return None, None, {}, {}
+
+
+def plan_row(found, row):
+    """Per field: leave it, fill it, or replace what is there. Replacing is
+    never decided here, only proposed."""
+    out = {}
+    for key in WANTED:
+        current = (found[key]['value'] or '').strip()
+        want = row[key]
+        out[key] = dict(current=current, want=want,
+                        action='ok' if current == want else ('fill' if not current else 'replace'))
+    return out
+
+
+def confirm(row, plan):
+    """Nothing is typed into a device without this returning True."""
+    replacing = [k for k, p in plan.items() if p['action'] == 'replace']
+    filling = [k for k, p in plan.items() if p['action'] == 'fill']
+    print('\n' + '=' * 68)
+    print('Signal %s' % row['id'])
+    if replacing:
+        print('!! %d field%s already filled in and DIFFERENT from the sheets.'
+              % (len(replacing), '' if len(replacing) == 1 else 's'))
+    for key, word in WANTED.items():
+        p = plan[key]
+        if p['action'] == 'ok':
+            print('  %-12s %-34s already correct' % (word, p['current']))
+        elif p['action'] == 'fill':
+            print('  %-12s %-34s <- would fill in' % (word, '(empty)'))
+            print('  %-12s %s' % ('', p['want']))
+        else:
+            print('  !!%-10s device says %r' % (word, p['current']))
+            print('  %-12s sheets say  %r' % ('', p['want']))
+    if not replacing and not filling:
+        print('  Nothing to type. Exporting only.')
+    print('=' * 68)
+    prompt = 'Type y to %s, n to skip this signal, q to stop: ' % (
+        'export' if not (replacing or filling) else
+        'REPLACE and save, then export' if replacing else 'fill in, save, then export')
+    while True:
+        answer = input(prompt).strip().lower()
+        if answer in ('y', 'n', 'q'):
+            return answer
+        print('  y, n or q.')
+
+
+def fill_and_save(frame, found, plan, buttons):
+    """Type the three, press Save Device Properties, then read them back.
+    No other control on the screen is touched."""
+    typed = {}
+    for key in WANTED:
+        if plan[key]['action'] == 'ok':
+            continue
+        frame.fill(selector(found[key]), plan[key]['want'])
+        typed[key] = plan[key]['want']
+    if typed:
+        frame.click(selector(buttons['save']) or 'text="%s"' % buttons['save']['text'])
+        frame.wait_for_timeout(1500)
+    after = {}
+    for key in WANTED:
+        try:
+            after[key] = (frame.input_value(selector(found[key])) or '').strip()
+        except Exception:
+            after[key] = None
+    return typed, after
+
+
+def export_config(page, frame, buttons, out_dir, signal_id):
+    """Click Export Configuration and keep whatever it sends. The link carries
+    no usable href on this firmware, so the click is the only way in."""
+    b = buttons.get('export')
+    if not b:
+        return None, 'no Export Configuration on this screen'
+    target = selector(b) or 'a:has-text("%s")' % b['text']
+    try:
+        with page.expect_download(timeout=45000) as caught:
+            frame.click(target)
+        download = caught.value
+    except Exception as exc:
+        return None, 'no download arrived (%s)' % type(exc).__name__
+    out_dir.mkdir(parents=True, exist_ok=True)
+    name = download.suggested_filename or ('%s.cbx' % signal_id)
+    path = out_dir / name
+    n = 1
+    while path.exists():                    # the device names these, so two runs collide
+        path = out_dir / ('%s (%d)%s' % (Path(name).stem, n, Path(name).suffix))
+        n += 1
+    download.save_as(path)
+    return path, ''
+
+
+def process_one(context, row, args, run):
+    """One clickbox. Returns the record. Raises nothing the batch cannot survive."""
+    rec = dict(id=row['id'], at=run, typed={}, before={}, after={},
+               exported='', skipped='', error='', note='')
+    page = context.new_page()
+    try:
+        try:
+            page.goto(row['clickbox_url'], wait_until='domcontentloaded',
+                      timeout=int(args.timeout * 1000))
+        except Exception as exc:
+            rec['error'] = 'could not be reached (%s)' % type(exc).__name__
+            return rec
+        frame, report, found, buttons = read_screen(page)
+        if not frame:
+            # The landing screen is not always the properties one.
+            for path in ('/device.asp', '/'):
+                try:
+                    page.goto(row['clickbox_url'].rstrip('/') + path,
+                              wait_until='domcontentloaded', timeout=int(args.timeout * 1000))
+                except Exception:
+                    continue
+                frame, report, found, buttons = read_screen(page)
+                if frame:
+                    break
+        if not frame:
+            rec['error'] = 'no Name, Location and Description on any screen'
+            return rec
+        if not buttons.get('save'):
+            rec['error'] = 'no Save Device Properties on this screen'
+            return rec
+        plan = plan_row(found, row)
+        rec['before'] = {k: plan[k]['current'] for k in WANTED}
+        answer = confirm(row, plan)
+        if answer == 'q':
+            rec['skipped'] = 'stopped here'
+            return rec
+        if answer == 'n':
+            rec['skipped'] = 'skipped'
+            return rec
+        typed, after = fill_and_save(frame, found, plan, buttons)
+        rec['typed'], rec['after'] = typed, after
+        wrong = [WANTED[k] for k in typed if after.get(k) != typed[k]]
+        if wrong:
+            rec['error'] = 'did not save: ' + ', '.join(wrong)
+            print('  The device still does not show %s. Not exporting.' % ', '.join(wrong))
+            return rec
+        # What the row note should say, when something was overwritten.
+        changed = ['%s was %r, now %r' % (WANTED[k], plan[k]['current'], typed[k])
+                   for k in typed if plan[k]['action'] == 'replace']
+        rec['note'] = '; '.join(changed)
+        path, why = export_config(page, frame, buttons, args.out_dir, row['id'])
+        if path:
+            rec['exported'] = str(path)
+            print('  Saved %s' % path)
+        else:
+            rec['error'] = why
+            print('  %s' % why)
+        return rec
+    finally:
+        page.close()
+
+
+def write_results(args, run, records):
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    path = args.out_dir / ('clickbox-run-%s.json' % run)
+    path.write_text(json.dumps({'schema': SCHEMA, 'run': run, 'results': records}, indent=2),
+                    encoding='utf-8')
+    return path
+
+
+def summarise(records, path):
+    done = [r for r in records if r['exported']]
+    notes = [r for r in records if r['note']]
+    print('\n' + '=' * 68)
+    print('%d of %d exported.' % (len(done), len(records)))
+    for r in records:
+        state = ('exported' if r['exported'] else r['skipped'] or r['error'] or 'nothing happened')
+        print('  %-6s %s' % (r['id'], state))
+    if notes:
+        print('\nOverwritten, worth putting in the row note in box.html:')
+        for r in notes:
+            print('  %-6s %s' % (r['id'], r['note']))
+    print('\nRun written to %s' % path)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('csv', type=Path, help='clickbox_worklist.csv from box.html')
     ap.add_argument('--describe', action='store_true',
                     help='Open one clickbox and report what the Properties screen contains')
-    ap.add_argument('--only', help='Signal ID to open')
-    ap.add_argument('--out', type=Path, default=Path('clickbox-diagnostic.json'))
+    ap.add_argument('--only', help='Signal IDs, comma separated')
+    ap.add_argument('--out', type=Path, default=Path('clickbox-diagnostic.json'),
+                    help='Where --describe writes its report')
+    ap.add_argument('--out-dir', type=Path, default=Path('clickbox-exports'),
+                    help='Folder the exported configurations land in')
     ap.add_argument('--browser', choices=['msedge', 'chrome', 'chromium'], default='msedge')
+    ap.add_argument('--timeout', type=float, default=20,
+                    help='Seconds to wait for a clickbox to answer (default: 20)')
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument('--limit', type=int, default=1,
+                       help='Clickboxes to work through (default: 1)')
+    group.add_argument('--all', action='store_true', help='The whole worklist')
     args = ap.parse_args()
 
     rows = read_worklist(args.csv)
-    if not args.describe:
-        print('Only --describe exists so far. Filling, saving and exporting are')
-        print('written once this has reported what the Properties screen looks like.')
-        print('%d %s in the worklist. Try:'
-              % (len(rows), 'signal' if len(rows) == 1 else 'signals'))
-        print('  py %s %s --describe --only %s' % (Path(sys.argv[0]).name, args.csv, rows[0]['id']))
-        return 2
     if args.only:
-        rows = [r for r in rows if r['id'] == args.only.strip()]
+        wanted = {x.strip() for x in args.only.split(',') if x.strip()}
+        rows = [r for r in rows if r['id'] in wanted]
     if not rows:
-        print('That ID is not in the worklist.')
+        print('Nothing in the worklist matches.')
         return 2
-    row = rows[0]
-    print('Signal %s. The proposal from the sheets is:' % row['id'])
-    for key, word in WANTED.items():
-        print('  %-12s %s' % (word, row[key]))
+    if not args.describe and not args.all:
+        rows = rows[:max(1, args.limit)]
 
     from playwright.sync_api import sync_playwright
+    run = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
             **({} if args.browser == 'chromium' else {'channel': args.browser}))
-        context = browser.new_context(accept_downloads=False)
+        # Downloads must be accepted or Export Configuration silently does nothing.
+        context = browser.new_context(accept_downloads=not args.describe)
         try:
-            describe(context.new_page(), row, args.out)
+            if args.describe:
+                row = rows[0]
+                print('Signal %s. The proposal from the sheets is:' % row['id'])
+                for key, word in WANTED.items():
+                    print('  %-12s %s' % (word, row[key]))
+                describe(context.new_page(), row, args.out)
+                return 0
+            print('%d clickbox%s. Each one asks before anything is typed.'
+                  % (len(rows), '' if len(rows) == 1 else 'es'))
+            print('Exports land in %s' % args.out_dir.resolve())
+            records = []
+            for row in rows:
+                rec = process_one(context, row, args, run)
+                records.append(rec)
+                if rec['skipped'] == 'stopped here':
+                    break
         finally:
             context.close()
             browser.close()
+    summarise(records, write_results(args, run, records))
     return 0
 
 
