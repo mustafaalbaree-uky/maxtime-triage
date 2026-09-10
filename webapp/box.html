@@ -629,10 +629,13 @@ function computeColumns(result, master, meta, found) {
     }
     out.det.push(mk("det", det, detKind));
 
-    /* Box or Front rack */
+    /* Box or Front rack. A note stands in for the answer when there is no
+       answer, so a controller that could not be reached says so in the cell
+       rather than leaving the sheet untouched. An answer outranks the note. */
     let bf = base.boxfr, bfKind = "base";
     if (f && f.biu === "yes") { bf = "BOX"; bfKind = "field"; }
     else if (f && f.biu === "no") { bf = "N/A"; bfKind = "field"; }
+    else if (f && S(f.note)) { bf = S(f.note); bfKind = "field"; }
     else if (e.files.length && !base.boxfr) { bf = "BOX"; bfKind = "auto"; }
     out.boxfr.push(mk("boxfr", bf, bfKind));
 
@@ -1081,8 +1084,10 @@ function viewCheck(r) {
           exported and saved to SharePoint</label>` : ""}
         ${noAnswer ? `<div style="margin-top:4px"><span class="flag">${
           f.failed ? "check failed" : f.undecided ? "no answer" : "not checked"}</span></div>` : ""}
-        ${f.biu ? `<input class="notebox notein" data-id="${h(e.id)}" placeholder="note"
-          value="${h(f.note || "")}">` : ""}
+        <input class="notebox notein" data-id="${h(e.id)}" value="${h(f.note || "")}"
+          placeholder="${f.biu ? "note" : "note, or what to put in the cell"}">
+        ${!f.biu && S(f.note) ? `<div><span class="tag t-field"
+          >pastes into Box or Front rack</span></div>` : ""}
       </td>
       <td class="ev">${f.reason || (Array.isArray(f.evidence) && f.evidence.length) ? `
         ${h(f.reason || "")}<br><small>${h(f.run || "")}</small>
@@ -1100,6 +1105,9 @@ function viewCheck(r) {
         <code>Cabinet Configuration</code>, <code>IO Modules</code>.</li>
       <li>A <code>TS2 DR1 BIU</code> in IO module 2 means there is a clickbox file.
         Press <b>BIU, box</b>. Nothing there, press <b>no BIU</b>.</li>
+      <li>If neither answer applies, a login that failed for instance, type it in
+        the note. With no BIU answer on the row, the note is what the Box or
+        Front rack column pastes.</li>
       <li>For a box, open the same IP at port <code>57150</code>, then
         <code>Properties</code>. If Name, Location and Description are blank,
         fill in the ID, the intersection, and KYTC District 7.</li>

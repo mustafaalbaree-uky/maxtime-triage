@@ -87,6 +87,17 @@ const out = {
     const pick = key => c2[key].find(x => x.id === id);
     return { id, det: pick("det"), boxfr: pick("boxfr"), boxdone: pick("boxdone") };
   })(),
+  noteEffect: (() => {
+    /* a note with no BIU answer stands in for the answer in the box column,
+       and an answer still outranks it */
+    const id = r.check.length ? r.check[0].id : null;
+    if (!id) return null;
+    const only = computeColumns(r, master, meta, { [id]: { note: "LOGIN FAILED" } });
+    const both = computeColumns(r, master, meta,
+      { [id]: { biu: "no", note: "LOGIN FAILED" } });
+    const pick = (c, key) => c[key].find(x => x.id === id);
+    return { id, noteOnly: pick(only, "boxfr"), withAnswer: pick(both, "boxfr") };
+  })(),
 };
 console.log(JSON.stringify(out, null, 2));
 """

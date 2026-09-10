@@ -176,6 +176,11 @@ Press **BIU, box** or **no BIU** for each. A box reveals the `:57150` link and
 a tick box for once the export is in SharePoint. What you press is saved in
 the browser and survives closing the page.
 
+Where neither answer applies, a login that failed for instance, type it in the
+row's note box instead. On a row with no BIU answer, the note is what the Box
+or Front rack column pastes, in place of `BOX` or `N/A`. Pressing either answer
+afterwards takes the cell back; the note stays on the row as a note.
+
 Rows the sheet already settles cleanly (front rack, `n/a`, with no question
 mark and nobody waiting) are not in the list; they are on the **settled** tab.
 
