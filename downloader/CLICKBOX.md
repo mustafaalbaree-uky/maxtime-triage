@@ -99,8 +99,19 @@ export is not attempted, because an export of a device that did not take the
 change is a file that says the wrong thing.
 
 At the end the run lists what happened per signal, names anything it overwrote,
-and writes the run record. Overwritten values are worth pasting into that row's
-note in box.html.
+and writes the run record.
+
+## Putting the run back into box.html
+
+**Import a clickbox run** in the check list bar takes
+`runs/clickbox-run-<stamp>.json` and ticks **exported off the device** for every
+signal that produced a file. Anything the device overwrote lands on that row as
+its note, so what the field used to say is not lost.
+
+It never ticks **moved to SharePoint**. Nothing but you moving the file can say
+that, and only that tick writes YES into the sheet's Box Verified column. A
+record with no file, one that was skipped, or an ID that is not in the current
+check list is listed in the report rather than applied.
 
 `--limit` defaults to 1, so the first run of a session is one device unless you
 ask for more. `--timeout` is how long a clickbox gets to answer, 20 seconds by

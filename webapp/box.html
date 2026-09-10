@@ -108,6 +108,8 @@
   input.notebox { border: 1px solid var(--line); border-radius: 6px;
     padding: 3px 7px; font: inherit; font-size: 12.5px; width: 100%;
     max-width: 260px; margin-top: 4px; display: block; }
+  .twostate { margin-top: 5px; font-size: 12.5px; }
+  .twostate label { display: block; }
   .props { margin-top: 6px; font-size: 11.5px; }
   .props summary { cursor: pointer; color: var(--accent); }
   .props .pline { display: flex; gap: 5px; align-items: baseline; margin-top: 4px; }
@@ -701,10 +703,44 @@ function stillToRun(check, found) {
   });
 }
 
-function boxesToDownload(check, found) {
+/* A box has two states after the answer, and they are not the same day's work:
+   the file is off the device, and the file is in the SharePoint folder. Rows
+   recorded before the two were told apart carry only `saved`, which meant
+   both, so it still counts as exported. */
+function isExported(f) { return !!(f && (f.exported || f.saved)); }
+
+function boxesToExport(check, found) {
   return check.filter(e => {
     const f = found[S(e.id)] || {};
-    return f.biu === "yes" && !f.saved && S(e.box_url);
+    return f.biu === "yes" && !isExported(f) && S(e.box_url);
+  });
+}
+
+function boxesToMove(check, found) {
+  return check.filter(e => {
+    const f = found[S(e.id)] || {};
+    return f.biu === "yes" && isExported(f) && !f.saved;
+  });
+}
+
+/* A run of fetch_clickbox.py. A record carrying an exported file is what ticks
+   exported; everything else is reported rather than applied. */
+function clickboxUpdates(payload, check, found) {
+  if (!payload || payload.schema !== "maxtime-clickbox-v1" || !Array.isArray(payload.results))
+    throw new Error("Not a clickbox run file");
+  const ids = new Set(check.map(e => S(e.id)));
+  return payload.results.map(r => {
+    const id = S(r && r.id), f = found[id] || {};
+    const exported = S(r && r.exported), note = S(r && r.note);
+    let skip = "";
+    if (!id) skip = "No ID in the record";
+    else if (!ids.has(id)) skip = "Not in the current check list";
+    else if (!exported) skip = S(r.skipped) || S(r.error) || "Nothing was exported";
+    let kind = "blocked";
+    if (!skip) kind = isExported(f) ? "already" : "exported";
+    return { id, exported, note, skip, kind,
+      /* what the device overwrote, which belongs on the row */
+      addNote: !skip && note && note !== S(f.note) };
   });
 }
 
@@ -743,6 +779,7 @@ let state = {
   found: store.get("found", {}),   // signal id -> {biu:"yes"|"no", saved, note,
                                    // failed, undecided, evidence, reason, run}
   lastImport: store.get("lastImport", null),
+  lastClickbox: store.get("lastClickbox", null),
   tab: store.get("tab", "check"),
   filter: "",
   hideDone: store.get("hideDone", false),
@@ -834,7 +871,7 @@ function setFound(id, patch) {
   if (next.biu == null && !flagged) {
     delete next.evidence; delete next.reason; delete next.checked_at; delete next.run;
   }
-  if (next.biu == null && !next.saved && !S(next.note) && !flagged)
+  if (next.biu == null && !next.saved && !next.exported && !S(next.note) && !flagged)
     delete state.found[id];
   else state.found[id] = next;
   saveFound(); refresh();
@@ -1006,7 +1043,7 @@ function fieldDone(e) {
 function renderSummary() {
   const r = result;
   const open = r.check.filter(e => !fieldDone(e)).length;
-  const owe = boxesToDownload(r.check, state.found).length;
+  const owe = boxesToExport(r.check, state.found).length;
   const flag = k => r.check.filter(e => (foundOf(S(e.id)) || {})[k]).length;
   const failed = flag("failed"), undecided = flag("undecided");
   const stats = [
@@ -1076,7 +1113,8 @@ function viewCheck(r) {
   let list = r.check.filter(matchesFilter);
   if (state.hideDone) list = list.filter(e => !fieldDone(e));
   const open = r.check.filter(e => !fieldDone(e)).length;
-  const owe = boxesToDownload(r.check, state.found).length;
+  const owe = boxesToExport(r.check, state.found).length;
+  const move = boxesToMove(r.check, state.found).length;
   const flag = k => r.check.filter(e => (foundOf(S(e.id)) || {})[k]).length;
   const failed = flag("failed"), undecided = flag("undecided");
   const rows = list.map(e => {
@@ -1087,7 +1125,7 @@ function viewCheck(r) {
       : `<span class="why w-noip">no IP</span>`;
     const bx = e.box_url && f.biu === "yes"
       ? `<br><a href="${h(e.box_url)}" target="_blank" rel="noopener">:57150</a>` : "";
-    const owed = f.biu === "yes" && !f.saved;   // A box whose file is not saved yet.
+    const owed = f.biu === "yes" && !f.saved;   // A box not yet in SharePoint.
     const pr = owed && e.box_url ? boxProperties(e) : null;
     const props = !pr ? "" : `<details class="props"><summary>properties</summary>
       ${pr.missing.length
@@ -1112,9 +1150,14 @@ function viewCheck(r) {
           <button class="rbtn ${f.biu === "no" ? "on-no" : ""}" data-id="${h(e.id)}" data-biu="no">no BIU</button>
           ${f.biu ? `<button class="rbtn" data-id="${h(e.id)}" data-biu="clear">clear</button>` : ""}
         </div>
-        ${f.biu === "yes" ? `<label style="font-size:12.5px;display:block;margin-top:4px">
-          <input type="checkbox" class="savedbox" data-id="${h(e.id)}" ${f.saved ? "checked" : ""}>
-          exported and saved to SharePoint</label>` : ""}
+        ${f.biu === "yes" ? `<div class="twostate">
+          <label><input type="checkbox" class="statebox" data-id="${h(e.id)}"
+            data-state="exported" ${isExported(f) ? "checked" : ""}>
+            exported off the device</label>
+          <label><input type="checkbox" class="statebox" data-id="${h(e.id)}"
+            data-state="saved" ${f.saved ? "checked" : ""}>
+            moved to SharePoint</label>
+        </div>` : ""}
         ${noAnswer ? `<div style="margin-top:4px"><span class="flag">${
           f.failed ? "check failed" : f.undecided ? "no answer" : "not checked"}</span></div>` : ""}
         <input class="notebox notein" data-id="${h(e.id)}" value="${h(f.note || "")}"
@@ -1145,8 +1188,12 @@ function viewCheck(r) {
         <code>Properties</code>. Open <b>properties</b> on the row for the Name,
         Location and Description that signal takes, with a copy button each.
         Then <code>Save Device Properties</code> at the bottom of the panel.</li>
-      <li><code>Export Configuration</code>, then put the file in the SharePoint
-        clickbox configuration folder and tick the box here.</li>
+      <li><code>Export Configuration</code>, then tick <b>exported off the
+        device</b>. Running <code>fetch_clickbox.py</code> and importing its run
+        ticks that for you.</li>
+      <li>Put the file in the SharePoint clickbox configuration folder, then tick
+        <b>moved to SharePoint</b>. Only that tick writes YES to the sheet's Box
+        Verified column.</li>
     </ol>
   </div>
   <div class="bar">
@@ -1155,10 +1202,10 @@ function viewCheck(r) {
       hide the ones I have done</label>
     <button class="primary" id="btnCsv">Export CSV</button>
     <button id="btnCopyIds">Copy ID list</button>
-    ${boxesToDownload(r.check, state.found).length
-      ? `<button class="primary" id="btnCopyBoxes">Copy the ${
-          boxesToDownload(r.check, state.found).length} boxes to download</button>
+    ${owe ? `<button class="primary" id="btnCopyBoxes">Copy the ${owe} ${
+          owe === 1 ? "box" : "boxes"} to export</button>
          <button id="btnBoxCsv">Export clickbox worklist</button>` : ""}
+    <label class="rbtn">Import a clickbox run <input id="clickboxRun" type="file" accept=".json" hidden></label>
     <button id="btnAutoCsv">Export automation worklist</button>
     ${window.showDirectoryPicker ? `<button id="btnNewestRun">${resultsDir
       ? "Newest script run" : "Point at the results folder"}</button>` : ""}
@@ -1167,17 +1214,56 @@ function viewCheck(r) {
     <span class="note">${open} of ${r.check.length} still open${r.noip.length
       ? `, ${r.noip.length} with no IP in the links sheet` : ""}</span>
     ${owe ? `<span class="chip">${owe} ${owe === 1 ? "box" : "boxes"} to export</span>` : ""}
+    ${move ? `<span class="chip">${move} exported, not in SharePoint yet</span>` : ""}
     ${failed || undecided ? `<span class="flag">${
       [failed && failed + " the script could not read",
        undecided && undecided + " with no answer"].filter(Boolean).join(", ")}</span>` : ""}
   </div>
   ${importReport()}
+  ${clickboxReport()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
     <th>Detection</th><th>Box / Verified</th><th>Why</th><th>Open</th>
     <th style="width:250px">What I found</th>
     <th style="width:220px">Script evidence</th></tr></thead>
     <tbody>${rows}</tbody></table>`
     : `<div class="empty">Nothing in the check list.</div>`}`;
+}
+
+/* A clickbox run ticks exported for every record that produced a file, and
+   carries across what the device overwrote as the row's note. It never ticks
+   moved to SharePoint: nothing but you moving the file can say that. */
+function importClickboxRun(payload, label) {
+  const updates = clickboxUpdates(payload, result.check, state.found);
+  const count = k => updates.filter(u => u.kind === k).length;
+  for (const u of updates) {
+    if (u.kind === "blocked") continue;
+    const cur = state.found[u.id] || {};
+    state.found[u.id] = { ...cur, exported: true,
+      note: u.addNote ? u.note : cur.note };
+  }
+  state.lastClickbox = { run: label, at: new Date().toISOString(),
+    exported: count("exported"), already: count("already"),
+    noted: updates.filter(u => u.addNote).map(u => ({ id: u.id, note: u.note })),
+    blocked: updates.filter(u => u.kind === "blocked")
+      .map(u => ({ id: u.id || "(no ID)", skip: u.skip })) };
+  store.set("lastClickbox", state.lastClickbox);
+  saveFound(); refresh();
+}
+
+function clickboxReport() {
+  const i = state.lastClickbox;
+  if (!i) return "";
+  return `<div class="step ${i.blocked.length ? "loud" : ""}">
+    <b>Clickbox run ${h(i.run)}</b>
+    <p>${i.exported} ticked as exported.
+    ${i.already ? i.already + " already were." : ""}
+    Moving them into SharePoint is still yours to tick.</p>
+    ${i.noted.length ? `<p><b>${i.noted.length} had something overwritten on the
+      device, now on the row as a note:</b></p>
+      <ul>${i.noted.map(n => `<li>${h(n.id)}: ${h(n.note)}</li>`).join("")}</ul>` : ""}
+    ${i.blocked.length ? `<p class="bad"><b>${i.blocked.length} could not be put on a row:</b></p>
+      <ul>${i.blocked.map(b => `<li>${h(b.id)}: ${h(b.skip)}</li>`).join("")}</ul>` : ""}
+    <button id="dismissClickbox">Dismiss</button></div>`;
 }
 
 function importReport() {
@@ -1215,6 +1301,7 @@ function viewHave(r) {
       columns tab fills those in.</span>
   </div>
   ${importReport()}
+  ${clickboxReport()}
   ${list.length ? `<table><thead><tr><th>ID</th><th>County</th><th>Intersection</th>
     <th>Box / Verified</th><th>Standing</th><th>File in the folder</th></tr></thead>
     <tbody>${rows}</tbody></table>`
@@ -1399,12 +1486,28 @@ function wirePanel() {
       { biu: b.dataset.biu === "clear" ? null : b.dataset.biu,
         failed: false, undecided: false,
         saved: b.dataset.biu === "clear" ? false : undefined });
+  const dismissBox = document.getElementById("dismissClickbox");
+  if (dismissBox) dismissBox.onclick = () => {
+    state.lastClickbox = null; store.del("lastClickbox"); renderPanel();
+  };
+  const clickboxRun = document.getElementById("clickboxRun");
+  if (clickboxRun) clickboxRun.onchange = async () => {
+    const file = clickboxRun.files && clickboxRun.files[0];
+    clickboxRun.value = "";
+    if (!file) return;
+    try { importClickboxRun(JSON.parse(await file.text()), file.name); }
+    catch (e) { toast(S(e.message) || "Could not read that run"); }
+  };
   const dismiss = document.getElementById("dismissImport");
   if (dismiss) dismiss.onclick = () => {
     state.lastImport = null; store.del("lastImport"); renderPanel();
   };
-  for (const c of document.querySelectorAll(".savedbox"))
-    c.onchange = () => setFound(c.dataset.id, { saved: c.checked });
+  // A file cannot be in SharePoint without having been exported, and it cannot
+  // stop having been exported while it is in SharePoint.
+  for (const c of document.querySelectorAll(".statebox"))
+    c.onchange = () => setFound(c.dataset.id, c.dataset.state === "saved"
+      ? { saved: c.checked, exported: c.checked ? true : undefined }
+      : { exported: c.checked, saved: c.checked ? undefined : false });
   for (const n of document.querySelectorAll(".notein"))
     n.onchange = () => setFound(n.dataset.id, { note: n.value });
 
@@ -1428,7 +1531,7 @@ function wirePanel() {
   const boxCsv = document.getElementById("btnBoxCsv");
   if (boxCsv) boxCsv.onclick = () => downloadCSV("clickbox_worklist.csv",
     [["id", "clickbox_url", "name", "location", "description"]].concat(
-      boxesToDownload(result.check, state.found).map(e => {
+      boxesToExport(result.check, state.found).map(e => {
         const p = boxProperties(e);
         return [e.id, e.box_url, p.name, p.location, p.description];
       })));
@@ -1461,7 +1564,7 @@ function wirePanel() {
     result.check.map(e => e.id).join("\n") + "\n", result.check.length + " IDs");
   const cbx = document.getElementById("btnCopyBoxes");
   if (cbx) cbx.onclick = () => {
-    const list = boxesToDownload(result.check, state.found);
+    const list = boxesToExport(result.check, state.found);
     copyText(list.map(e => `${e.id}\t${intersection(e)}\t${e.box_url}`).join("\n") + "\n",
       list.length + " boxes to download");
   };

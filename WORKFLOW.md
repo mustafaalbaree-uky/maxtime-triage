@@ -178,6 +178,12 @@ Press **BIU, box** or **no BIU** for each. A box reveals the `:57150` link and
 a tick box for once the export is in SharePoint. What you press is saved in
 the browser and survives closing the page.
 
+A row answered **BIU, box** carries two ticks, not one: **exported off the
+device** and **moved to SharePoint**. They are separate days' work, and only the
+second writes YES into the sheet's Box Verified column. Importing a run of
+`fetch_clickbox.py` ticks the first for you; nothing but you can tick the
+second. See `downloader/CLICKBOX.md`.
+
 Where neither answer applies, a login that failed for instance, type it in the
 row's note box instead. On a row with no BIU answer, the note is what the Box
 or Front rack column pastes, in place of `BOX` or `N/A`. Pressing either answer
