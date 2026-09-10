@@ -23,9 +23,34 @@ def field(**kw):
     return base
 
 
+def button(text, tag='button', href=''):
+    return dict(tag=tag, id='', cls='', text=text, href=href, disabled=False)
+
+
 def screen(fields, buttons=()):
     return {'fields': list(fields),
-            'buttons': [dict(tag='button', id='', cls='', text=t, disabled=False) for t in buttons]}
+            'buttons': [b if isinstance(b, dict) else button(b) for b in buttons]}
+
+
+# The Click 656 Properties screen, as one reported it on 10 Sep 2026: the three
+# fields carry trailing colons, the save control is an input[type=button] that
+# lands in the field list too, and Export Configuration is a plain footer link.
+CLICK656_FIELDS = [
+    field(id='deviceEthernetToControlPort', labels=['Ethernet/Control IP Port:'], value='10001'),
+    field(id='deviceName', labels=['Name:'], value=''),
+    field(id='deviceLocation', labels=['Location:'], value=''),
+    field(id='deviceDescription', labels=['Description:'], value=''),
+    field(id='ipAddress0', labels=['IP Address:'], value='192'),
+    field(id='biu9', type='checkbox', labels=['9'], value='on'),
+    field(id='btnSaveDevice', type='button', labels=['btnSaveDevice'], value='Save Device Properties'),
+]
+CLICK656_BUTTONS = [
+    button('Save Device Properties', tag='input'),
+    button('Main', tag='a', href='/'),
+    button('Admin', tag='a', href='/admin'),
+    button('Export Configuration', tag='a', href='/exportconfig'),
+    button('Import Configuration', tag='a', href='/importconfig'),
+]
 
 
 class UrlTests(unittest.TestCase):
@@ -95,6 +120,34 @@ class GuessTests(unittest.TestCase):
         found, _ = guess(screen([field(id='pw', type='password', secret=True,
                                        labels=['Name']), ]))
         self.assertNotIn('name', found)
+
+    def test_the_real_click_656_properties_screen(self):
+        found, buttons = guess(screen(CLICK656_FIELDS, CLICK656_BUTTONS))
+        self.assertEqual(found['name']['id'], 'deviceName')
+        self.assertEqual(found['location']['id'], 'deviceLocation')
+        self.assertEqual(found['description']['id'], 'deviceDescription')
+        self.assertEqual(buttons['save']['text'], 'Save Device Properties')
+        self.assertEqual(buttons['export']['href'], '/exportconfig')
+
+    def test_the_save_control_is_never_taken_for_a_text_field(self):
+        # btnSaveDevice is an input[type=button], so it sits in the field list
+        # beside the real fields. Nothing may ever be typed into it.
+        found, _ = guess(screen([field(id='btnSaveDevice', type='button',
+                                       labels=['Name'], value='Save')]))
+        self.assertEqual(found, {})
+
+    def test_a_readonly_field_is_not_offered(self):
+        found, _ = guess(screen([field(id='ro', labels=['Name'], readonly=True)]))
+        self.assertEqual(found, {})
+
+    def test_export_is_found_as_a_plain_link(self):
+        _, buttons = guess(screen([], [button('Export Configuration', tag='a', href='/exportconfig')]))
+        self.assertEqual(buttons['export']['tag'], 'a')
+
+    def test_the_exact_save_wins_over_another_control_saying_save(self):
+        _, buttons = guess(screen([], [button('Save Sensor Settings'),
+                                       button('Save Device Properties')]))
+        self.assertEqual(buttons['save']['text'], 'Save Device Properties')
 
     def test_missing_controls_are_reported_rather_than_invented(self):
         found, buttons = guess(screen([field(id='x', labels=['Serial'])]))

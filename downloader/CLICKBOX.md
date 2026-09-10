@@ -61,6 +61,24 @@ with the proposal, or differs from it.
 Press Enter again after moving to another tab to describe that screen too.
 Type `QUIT` to finish.
 
+## What one Click 656 reported, 10 Sep 2026
+
+The first real read, on a Wavetronix Click 656 running firmware 1.2.0:
+
+* The three fields are `deviceName`, `deviceLocation` and `deviceDescription`,
+  labelled `Name:`, `Location:` and `Description:`.
+* Saving is `btnSaveDevice`, an `input[type=button]` reading
+  `Save Device Properties`. It sits in the field list as well as the button
+  list, so the fill step must never treat it as somewhere to type.
+* **Export Configuration is a plain footer link**, not a button:
+  `Main | Admin | Export Configuration | Import Configuration | Upgrade | About`.
+  The first version of this tool looked only for buttons and missed it.
+* The Properties screen is served at `/` and the top tabs (PROPERTIES, SENSORS,
+  CHANNELS, VERIFICATION, HEALTH, GRAPHS) do not change the path.
+* The same screen carries the device's IP address, subnet mask, default gateway,
+  Ethernet control port and the BIU and sensor port checkboxes. The fill step
+  touches the three properties and nothing else.
+
 ## What to send back
 
 `clickbox-diagnostic.json`, written next to the script. It holds the screen

@@ -22,8 +22,10 @@ SCHEMA = 'maxtime-clickbox-v1'
 CLICKBOX_PORT = 57150
 # What the fill step will be looking for, once it exists.
 WANTED = {'name': 'Name', 'location': 'Location', 'description': 'Description'}
-SAVE_TEXT = re.compile(r'save\s+device\s+properties|save', re.I)
-EXPORT_TEXT = re.compile(r'export\s+configuration', re.I)
+SAVE_TEXT = re.compile(r'\bsave\b', re.I)
+SAVE_EXACT = re.compile(r'save\s+device\s+properties', re.I)
+EXPORT_TEXT = re.compile(r'\bexport\b', re.I)
+EXPORT_EXACT = re.compile(r'export\s+configuration', re.I)
 
 # Every visible control, its label wherever the label is hiding, and what it
 # currently holds. Passwords are named and never read. The host is not included:
@@ -80,11 +82,17 @@ DESCRIBE_JS = r"""() => {
      secret,
    };
  });
- const buttons = Array.from(document.querySelectorAll('button,input[type=button],input[type=submit],a[role=button],[role=button]')).filter(visible).slice(0, 40).map(e => ({
-   tag: e.tagName.toLowerCase(), id: cut(e.id, 40), cls: cls(e),
-   text: cut(e.value || e.textContent || e.getAttribute('aria-label'), 60),
-   disabled: !!e.disabled,
- }));
+ // Plain anchors count. On the Click 656 the whole footer nav, Export
+ // Configuration included, is <a> text with no role and no button styling.
+ const buttons = Array.from(document.querySelectorAll('button,input[type=button],input[type=submit],a,[role=button]')).filter(visible).slice(0, 60).map(e => {
+   let href = '';
+   try { href = e.tagName === 'A' && e.href ? new URL(e.href).pathname + new URL(e.href).hash : ''; } catch (err) { href = ''; }
+   return {
+     tag: e.tagName.toLowerCase(), id: cut(e.id, 40), cls: cls(e),
+     text: cut(e.value || e.textContent || e.getAttribute('aria-label'), 60),
+     href: cut(href, 60), disabled: !!e.disabled,
+   };
+ });
  const tabs = Array.from(document.querySelectorAll('[role=tab],.tab,.nav-link,li>a')).filter(visible).slice(0, 30)
    .map(e => cut(e.textContent, 40)).filter(Boolean);
  return {
@@ -141,7 +149,11 @@ def guess(report):
     for key, word in WANTED.items():
         best = None
         for i, f in enumerate(report['fields']):
-            if i in used or f['secret'] or f['tag'] == 'select':
+            # Only somewhere text can be typed. The Save button is an
+            # input[type=button] and turns up in this list too.
+            if i in used or f['secret'] or f['readonly']:
+                continue
+            if f['type'] not in ('text', 'search', 'textarea'):
                 continue
             hits = [t for t in f['labels'] + [f['id'], f['name']] if t]
             exact = any(re.fullmatch(word, t.strip(' :*'), re.I) for t in hits)
@@ -154,10 +166,11 @@ def guess(report):
         if best:
             used.add(best[1])
             found[key] = best[2]
-    buttons = {
-        'save': next((b for b in report['buttons'] if SAVE_TEXT.search(b['text'] or '')), None),
-        'export': next((b for b in report['buttons'] if EXPORT_TEXT.search(b['text'] or '')), None),
-    }
+    def pick(exact, loose):
+        hits = [b for b in report['buttons'] if loose.search(b['text'] or '')]
+        return next((b for b in hits if exact.fullmatch((b['text'] or '').strip())), None) \
+            or (hits[0] if hits else None)
+    buttons = {'save': pick(SAVE_EXACT, SAVE_TEXT), 'export': pick(EXPORT_EXACT, EXPORT_TEXT)}
     return found, buttons
 
 
@@ -172,9 +185,10 @@ def show(report, row):
                                               ' / '.join(f['labels'][:3]) or 'none'))
         if not f['secret']:
             print('       currently: %s' % (repr(f['value']) if f['value'] else 'empty'))
-    print('\nButtons on screen:')
+    print('\nButtons and links on screen:')
     for b in report['buttons']:
-        print('  %-28s %s' % (b['text'] or b['id'] or b['cls'], 'disabled' if b['disabled'] else ''))
+        print('  %-28s %-8s %s%s' % (b['text'] or b['id'] or b['cls'], b['tag'],
+                                     b.get('href') or '', ' disabled' if b['disabled'] else ''))
 
     found, buttons = guess(report)
     print('\nBest guess at what the fill step needs:')
@@ -194,7 +208,8 @@ def show(report, row):
               % (word, f['id'] or f['name'] or f['path'], cur, verdict))
     for key, label in (('save', 'Save Device Properties'), ('export', 'Export Configuration')):
         b = buttons[key]
-        print('  %-12s %s' % (label, ('button %r' % b['text']) if b else 'not found on this screen'))
+        print('  %-12s %s' % (label, ('%s %r %s' % (b['tag'], b['text'], b.get('href') or ''))
+                              if b else 'not found on this screen'))
     return found, buttons
 
 
