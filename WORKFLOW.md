@@ -179,9 +179,11 @@ a tick box for once the export is in SharePoint. What you press is saved in
 the browser and survives closing the page.
 
 A clickbox that never answers is recorded with the reason and the run carries
-on; importing that run leaves the row untouched and lists it. `--auto` works
-through the list without stopping, except at a device whose fields already
-disagree with the sheets.
+on; importing that run puts the reason on the row as its note and leaves the
+signal in the list. `--auto` works through the list without stopping, except at
+a device whose fields already disagree with the sheets. A signal an earlier run
+already exported is skipped, so a worklist exported before that run cannot
+cause a second visit.
 
 A row answered **BIU, box** carries two ticks, not one: **exported off the
 device** and **moved to SharePoint**. They are separate days' work, and only the

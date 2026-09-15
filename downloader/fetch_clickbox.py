@@ -504,6 +504,29 @@ def process_one(context, row, args, run):
         page.close()
 
 
+def already_exported(out_dir):
+    """Signal IDs that a previous run already got a file off.
+
+    The worklist is exported from box.html before the run and reflects what the
+    page knew then, so a worklist made before the last run still carries what
+    that run finished. The device names the configurations itself, so the files
+    folder cannot be read for this; the run records can.
+    """
+    done = {}
+    runs = Path(out_dir) / RUNS_SUBDIR
+    for path in sorted(runs.glob('clickbox-run-*.json')) if runs.is_dir() else []:
+        try:
+            payload = json.loads(path.read_text(encoding='utf-8'))
+        except Exception:
+            continue                        # a half written record is not evidence
+        if payload.get('schema') != SCHEMA:
+            continue
+        for rec in payload.get('results') or []:
+            if rec.get('exported') and rec.get('id'):
+                done.setdefault(str(rec['id']), path.name)
+    return done
+
+
 def write_results(args, run, records):
     runs = args.out_dir / RUNS_SUBDIR
     runs.mkdir(parents=True, exist_ok=True)
@@ -549,6 +572,8 @@ def main():
                          'disagrees with the sheets still stops and waits')
     ap.add_argument('--auto-replace', action='store_true',
                     help='Implies --auto, and replaces a disagreeing value without asking')
+    ap.add_argument('--again', action='store_true',
+                    help='Work through signals an earlier run already exported')
     ap.add_argument('--timeout', type=float, default=20,
                     help='Seconds to wait for a clickbox to answer (default: 20)')
     group = ap.add_mutually_exclusive_group()
@@ -565,6 +590,19 @@ def main():
     if not rows:
         print('Nothing in the worklist matches.')
         return 2
+    if not args.describe and not args.only and not args.again:
+        done = already_exported(args.out_dir)
+        keep = [r for r in rows if r['id'] not in done]
+        if len(keep) != len(rows):
+            print('%d already exported by an earlier run, skipping %s.'
+                  % (len(rows) - len(keep),
+                     ','.join(r['id'] for r in rows if r['id'] in done)))
+            print('--again works through them anyway. --only names one whatever this says.')
+            rows = keep
+        if not rows:
+            print('Nothing left in this worklist. Import the runs into box.html '
+                  'and export a new one.')
+            return 0
     if not args.describe and not args.all:
         rows = rows[:max(1, args.limit)]
 

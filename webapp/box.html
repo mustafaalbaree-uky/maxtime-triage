@@ -724,23 +724,28 @@ function boxesToMove(check, found) {
 }
 
 /* A run of fetch_clickbox.py. A record carrying an exported file is what ticks
-   exported; everything else is reported rather than applied. */
+   exported. A device that answered badly, one that timed out for instance, ties
+   nothing but says so on the row, since the row is where that is looked for.
+   A note a person typed is never written over: only an empty note, or one a
+   previous run wrote, gives way. */
 function clickboxUpdates(payload, check, found) {
   if (!payload || payload.schema !== "maxtime-clickbox-v1" || !Array.isArray(payload.results))
     throw new Error("Not a clickbox run file");
   const ids = new Set(check.map(e => S(e.id)));
   return payload.results.map(r => {
     const id = S(r && r.id), f = found[id] || {};
-    const exported = S(r && r.exported), note = S(r && r.note);
-    let skip = "";
+    const exported = S(r && r.exported);
+    const error = S(r && r.error), skipped = S(r && r.skipped);
+    let skip = "", kind = "blocked", note = "";
     if (!id) skip = "No ID in the record";
     else if (!ids.has(id)) skip = "Not in the current check list";
-    else if (!exported) skip = S(r.skipped) || S(r.error) || "Nothing was exported";
-    let kind = "blocked";
-    if (!skip) kind = isExported(f) ? "already" : "exported";
+    else if (exported) { kind = isExported(f) ? "already" : "exported"; note = S(r.note); }
+    else if (error) { kind = "failed"; note = error; }
+    else skip = skipped || "Nothing was exported";
+    const mine = !S(f.note) || f.noteFrom === "clickbox";
     return { id, exported, note, skip, kind,
-      /* what the device overwrote, which belongs on the row */
-      addNote: !skip && note && note !== S(f.note) };
+      addNote: !!note && note !== S(f.note) && mine,
+      keptNote: !!note && note !== S(f.note) && !mine };
   });
 }
 
@@ -1230,20 +1235,26 @@ function viewCheck(r) {
 }
 
 /* A clickbox run ticks exported for every record that produced a file, and
-   carries across what the device overwrote as the row's note. It never ticks
-   moved to SharePoint: nothing but you moving the file can say that. */
+   carries across what the device overwrote as the row's note. A record that
+   failed lands as the row's note and ticks nothing. It never ticks moved to
+   SharePoint: nothing but you moving the file can say that. */
 function importClickboxRun(payload, label) {
   const updates = clickboxUpdates(payload, result.check, state.found);
   const count = k => updates.filter(u => u.kind === k).length;
+  const pick = k => updates.filter(u => u.kind === k);
   for (const u of updates) {
     if (u.kind === "blocked") continue;
     const cur = state.found[u.id] || {};
-    state.found[u.id] = { ...cur, exported: true,
-      note: u.addNote ? u.note : cur.note };
+    const next = { ...cur };
+    if (u.kind !== "failed") next.exported = true;
+    if (u.addNote) { next.note = u.note; next.noteFrom = "clickbox"; }
+    state.found[u.id] = next;
   }
   state.lastClickbox = { run: label, at: new Date().toISOString(),
     exported: count("exported"), already: count("already"),
-    noted: updates.filter(u => u.addNote).map(u => ({ id: u.id, note: u.note })),
+    noted: updates.filter(u => u.addNote && u.kind !== "failed")
+      .map(u => ({ id: u.id, note: u.note })),
+    failed: pick("failed").map(u => ({ id: u.id, note: u.note, kept: u.keptNote })),
     blocked: updates.filter(u => u.kind === "blocked")
       .map(u => ({ id: u.id || "(no ID)", skip: u.skip })) };
   store.set("lastClickbox", state.lastClickbox);
@@ -1253,7 +1264,8 @@ function importClickboxRun(payload, label) {
 function clickboxReport() {
   const i = state.lastClickbox;
   if (!i) return "";
-  return `<div class="step ${i.blocked.length ? "loud" : ""}">
+  const failed = i.failed || [];
+  return `<div class="step ${i.blocked.length || failed.length ? "loud" : ""}">
     <b>Clickbox run ${h(i.run)}</b>
     <p>${i.exported} ticked as exported.
     ${i.already ? i.already + " already were." : ""}
@@ -1261,6 +1273,10 @@ function clickboxReport() {
     ${i.noted.length ? `<p><b>${i.noted.length} had something overwritten on the
       device, now on the row as a note:</b></p>
       <ul>${i.noted.map(n => `<li>${h(n.id)}: ${h(n.note)}</li>`).join("")}</ul>` : ""}
+    ${failed.length ? `<p class="bad"><b>${failed.length} did not export. The row
+      says why and is still in the list:</b></p>
+      <ul>${failed.map(n => `<li>${h(n.id)}: ${h(n.note)}${
+        n.kept ? " (the note already on the row was left alone)" : ""}</li>`).join("")}</ul>` : ""}
     ${i.blocked.length ? `<p class="bad"><b>${i.blocked.length} could not be put on a row:</b></p>
       <ul>${i.blocked.map(b => `<li>${h(b.id)}: ${h(b.skip)}</li>`).join("")}</ul>` : ""}
     <button id="dismissClickbox">Dismiss</button></div>`;
@@ -1509,7 +1525,7 @@ function wirePanel() {
       ? { saved: c.checked, exported: c.checked ? true : undefined }
       : { exported: c.checked, saved: c.checked ? undefined : false });
   for (const n of document.querySelectorAll(".notein"))
-    n.onchange = () => setFound(n.dataset.id, { note: n.value });
+    n.onchange = () => setFound(n.dataset.id, { note: n.value, noteFrom: undefined });
 
   for (const b of document.querySelectorAll(".btnCol"))
     b.onclick = () => {

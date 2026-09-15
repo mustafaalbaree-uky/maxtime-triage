@@ -7,8 +7,8 @@ from unittest import mock
 
 from fetch_clickbox import (FILES_SUBDIR, PROPERTIES_TAB, RUNS_SUBDIR,
                             clickbox_origin, export_config, fill_and_save, guess,
-                            confirm, nav_error, open_properties, plan_row,
-                            read_worklist, selector, write_results)
+                            already_exported, confirm, nav_error, open_properties,
+                            plan_row, read_worklist, selector, write_results)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
 GOOD = HEAD + '4380,http://192.0.2.1:57150/,076-4380,US 25 at KY 52 (IRVING RD),KYTC D7\n'
@@ -430,6 +430,57 @@ class AutoTests(unittest.TestCase):
         plan = plan_row(self.EMPTY, ROW)
         with mock.patch('builtins.input', side_effect=['n']):
             self.assertEqual(confirm(ROW, plan), 'n')
+
+
+class MemoryTests(unittest.TestCase):
+    """A worklist exported before the last run still carries what that run
+    finished, so the run records are what stop a second visit."""
+
+    def runs(self, d, *records):
+        out = Path(d) / 'clickbox-exports'
+        for i, recs in enumerate(records):
+            write_results(Args(out), '2026091%dT120000Z' % i, list(recs))
+        return out
+
+    def rec(self, sid, **kw):
+        base = dict(id=sid, exported='', skipped='', error='', note='')
+        base.update(kw)
+        return base
+
+    def test_an_exported_signal_is_remembered(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.runs(d, [self.rec('4030', exported='files/a.cbx')])
+            self.assertEqual(sorted(already_exported(out)), ['4030'])
+
+    def test_a_failure_is_not_remembered_as_done(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.runs(d, [self.rec('4002', error='never answered'),
+                                self.rec('4003', skipped='skipped')])
+            self.assertEqual(already_exported(out), {})
+
+    def test_every_run_record_counts_not_only_the_last(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.runs(d, [self.rec('4030', exported='a')],
+                               [self.rec('4031', exported='b')])
+            self.assertEqual(sorted(already_exported(out)), ['4030', '4031'])
+
+    def test_a_folder_with_no_runs_remembers_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(already_exported(Path(d) / 'nothing-here'), {})
+
+    def test_an_unreadable_record_is_not_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.runs(d, [self.rec('4030', exported='a')])
+            (out / RUNS_SUBDIR / 'clickbox-run-broken.json').write_text('{ not json')
+            self.assertEqual(sorted(already_exported(out)), ['4030'])
+
+    def test_another_tools_json_is_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / 'clickbox-exports'
+            (out / RUNS_SUBDIR).mkdir(parents=True)
+            (out / RUNS_SUBDIR / 'clickbox-run-x.json').write_text(
+                '{"schema": "maxtime-biu-v1", "results": [{"id": "4030", "exported": "a"}]}')
+            self.assertEqual(already_exported(out), {})
 
 
 if __name__ == '__main__':

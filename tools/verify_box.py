@@ -98,6 +98,26 @@ const out = {
     const pick = (c, key) => c[key].find(x => x.id === id);
     return { id, noteOnly: pick(only, "boxfr"), withAnswer: pick(both, "boxfr") };
   })(),
+
+  clickboxRun: (() => {
+    /* what a run of fetch_clickbox.py does to the rows: a file ticks exported,
+       a failure lands on the row as its note and ticks nothing, and a note a
+       person typed is never written over */
+    const ids = r.check.slice(0, 3).map(e => e.id);
+    if (ids.length < 3) return null;
+    const found = { [ids[2]]: { biu: "yes", note: "asked the district" } };
+    const run = { schema: "maxtime-clickbox-v1", run: "x", results: [
+      { id: ids[0], exported: "files/a.cbx", error: "", skipped: "", note: "" },
+      { id: ids[1], exported: "", skipped: "",
+        error: "the clickbox never answered at port 57150 (timed out)", note: "" },
+      { id: ids[2], exported: "", skipped: "",
+        error: "no Save Device Properties on this screen", note: "" },
+      { id: "9999", exported: "files/b.cbx", error: "", skipped: "", note: "" },
+    ] };
+    const by = {};
+    for (const u of clickboxUpdates(run, r.check, found)) by[u.id] = u;
+    return by;
+  })(),
 };
 console.log(JSON.stringify(out, null, 2));
 """

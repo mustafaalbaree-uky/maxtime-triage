@@ -129,10 +129,32 @@ and writes the run record.
 signal that produced a file. Anything the device overwrote lands on that row as
 its note, so what the field used to say is not lost.
 
+A signal that did not export lands on its row as a note saying why, `the
+clickbox never answered at port 57150 (timed out)` for instance, and ticks
+nothing. It stays in the check list and in the next worklist. A note you typed
+yourself is never written over: the report says the row kept it.
+
 It never ticks **moved to SharePoint**. Nothing but you moving the file can say
 that, and only that tick writes YES into the sheet's Box Verified column. A
-record with no file, one that was skipped, or an ID that is not in the current
-check list is listed in the report rather than applied.
+record that was skipped by hand, or an ID that is not in the current check
+list, is listed in the report rather than applied.
+
+Export a fresh `clickbox_worklist.csv` after importing and the finished
+signals are gone from it.
+
+## A worklist that is out of date
+
+The page cannot see the script running, so a worklist exported before a run
+still carries what that run finished. The script reads its own previous run
+records and skips those signals rather than visiting them twice:
+
+```
+1 already exported by an earlier run, skipping 4380.
+```
+
+`--again` works through them anyway, and `--only` names a signal whatever the
+records say. Both read `clickbox-exports/runs/`, so `--out-dir` moves the
+memory with the files.
 
 `--limit` defaults to 1, so the first run of a session is one device unless you
 ask for more. `--timeout` is how long a clickbox gets to answer, 20 seconds by
