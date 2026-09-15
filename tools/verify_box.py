@@ -129,6 +129,17 @@ const out = {
     return by;
   })(),
 
+  radarNoBiu: (() => {
+    /* the sheet says radar and the controller says no BIU: the rows to knock
+       on before their cells are decided */
+    const radar = r.check.filter(e => /wavetronix|radar/i.test(String(e.detection || "")));
+    if (!radar.length) return null;
+    const id = radar[0].id, other = r.check.find(e => e.id !== id);
+    const found = { [id]: { biu: "no" }, [other.id]: { biu: "yes" } };
+    return { picked: radarNoBiu(r.check, found).map(e => e.id),
+             radarInCheckList: radar.length };
+  })(),
+
   signed: (() => {
     /* which Box Verified cells carry who decided them, and which do not */
     const ids = r.check.slice(0, 2).map(e => e.id);

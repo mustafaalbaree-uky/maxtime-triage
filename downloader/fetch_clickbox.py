@@ -140,8 +140,13 @@ def clickbox_origin(url):
     return (p.scheme.lower(), p.hostname.lower(), p.port)
 
 
-def read_worklist(path):
-    """The clickbox worklist exported from box.html."""
+def read_worklist(path, need_values=True):
+    """The clickbox worklist exported from box.html.
+
+    `need_values` is off only for a knock, which opens no device and types
+    nothing, so a signal whose sheets cannot produce a Name or a Location can
+    still be asked whether it is there.
+    """
     want = {'id', 'clickbox_url', 'name', 'location', 'description'}
     with open(path, encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
@@ -154,7 +159,7 @@ def read_worklist(path):
             r[k] = (r[k] or '').strip()
         if not re.fullmatch(r'[4-9]\d{3}', r['id']) or r['id'] in seen:
             raise ValueError('Worklist contains an invalid or duplicate ID')
-        if not r['name'] or not r['location'] or not r['description']:
+        if need_values and not (r['name'] and r['location'] and r['description']):
             raise ValueError('Signal %s has no proposed properties; fix the sheets first' % r['id'])
         seen.add(r['id'])
         clickbox_origin(r['clickbox_url'])
@@ -707,7 +712,7 @@ def main():
     args = ap.parse_args()
     args.auto = args.auto or args.auto_replace
 
-    rows = read_worklist(args.csv)
+    rows = read_worklist(args.csv, need_values=not args.ping)
     if args.only:
         wanted = {x.strip() for x in args.only.split(',') if x.strip()}
         rows = [r for r in rows if r['id'] in wanted]

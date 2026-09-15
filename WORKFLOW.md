@@ -205,6 +205,13 @@ in the folder, even though its row has left the check list by then. A cell the
 sheet already fills is copied through untouched and is never signed, and
 neither is a blank one.
 
+A row whose Detection already says Wavetronix and which you answered **no BIU**
+on is counted separately in the bar, since the sheet and the cabinet disagree
+about whether the box question applies to it. **Export the N Wavetronix with no
+BIU** writes those rows for `fetch_clickbox.py --ping`, which says whether a
+clickbox answers at any of them. Their cells still paste `N/A` until that is
+settled.
+
 Where neither answer applies, a login that failed for instance, type it in the
 row's note box instead. On a row with no BIU answer, the note is what the Box
 or Front rack column pastes, in place of `BOX` or `N/A`. Pressing either answer

@@ -90,6 +90,14 @@ class WorklistTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_worklist(worklist(GOOD + GOOD.split('\n')[1] + '\n'))
 
+    def test_a_knock_may_read_a_list_with_no_proposals(self):
+        # The radar with no BIU list is for asking whether a device is there,
+        # not for typing into one, so a row the sheets cannot describe is still
+        # worth knocking on.
+        rows = read_worklist(worklist(HEAD + '4380,http://192.0.2.1:57150/,,,\n'),
+                             need_values=False)
+        self.assertEqual(rows[0]['id'], '4380')
+
     def test_a_signal_with_no_proposal_is_refused(self):
         # A blank Name means the sheets are missing a CountyID. Typing an empty
         # string into a controller is worse than stopping.

@@ -225,6 +225,31 @@ exported, since it opened no browser. Those rows keep their place in the check
 list, carry the reason as their note, and go to the back of the next run's
 list.
 
+## Wavetronix in the sheet with no BIU in the cabinet
+
+Those two disagree. Radar detection means the box question applies, and no BIU
+in module 2 says it does not, so `N/A` may be the wrong word for the cell.
+Before deciding, knock on them:
+
+```
+py fetch_clickbox.py clickbox_radar_no_biu.csv --ping --again
+```
+
+**Export the N Wavetronix with no BIU** in the check list bar writes that file.
+It is the same shape as the worklist, so `--ping` reads it unchanged, and a row
+whose sheets cannot produce a Name or a Location is still in it, since a knock
+opens no device and types nothing.
+
+What the answers mean:
+
+* **silent everywhere**: the pattern holds. No clickbox answers on any of them,
+  which is consistent with the Click modules being in the front rack rather
+  than in a box of their own.
+* **some answer**: those signals do have a clickbox, and the no BIU answer on
+  them is worth checking again.
+
+Decide the wording for the cell once the pattern is known, not before.
+
 ## A field the device cannot hold
 
 The Click 656 caps Location at 32 characters and cuts the rest off as the

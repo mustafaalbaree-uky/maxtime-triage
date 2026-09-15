@@ -641,7 +641,7 @@ function computeColumns(result, master, meta, found) {
        says Loops or was never set is corrected. No BIU proves nothing about
        what the detection is, so it is left alone. */
     let det = base.det, detKind = "base";
-    if (f && f.biu === "yes" && !/wavetronix|radar/i.test(base.det)) {
+    if (f && f.biu === "yes" && !RADAR_RE.test(base.det)) {
       det = "Wavetronix"; detKind = "field";
     }
     out.det.push(mk("det", det, detKind));
@@ -724,6 +724,18 @@ function boxesToExport(check, found) {
   return check.filter(e => {
     const f = found[S(e.id)] || {};
     return f.biu === "yes" && !isExported(f) && S(e.box_url);
+  });
+}
+
+/* The sheet says the detection is radar and the controller says there is no
+   BIU in module 2. Both cannot describe the same cabinet: radar means the box
+   question applies, and no BIU says it does not. These are the rows to knock
+   on before anything is written into their cells. */
+const RADAR_RE = /wavetronix|radar/i;
+function radarNoBiu(check, found) {
+  return check.filter(e => {
+    const f = found[S(e.id)] || {};
+    return f.biu === "no" && RADAR_RE.test(S(e.detection)) && S(e.box_url);
   });
 }
 
@@ -1134,6 +1146,7 @@ function viewCheck(r) {
   const open = r.check.filter(e => !fieldDone(e)).length;
   const owe = boxesToExport(r.check, state.found).length;
   const move = boxesToMove(r.check, state.found).length;
+  const odd = radarNoBiu(r.check, state.found).length;
   const flag = k => r.check.filter(e => (foundOf(S(e.id)) || {})[k]).length;
   const failed = flag("failed"), undecided = flag("undecided");
   const rows = list.map(e => {
@@ -1225,6 +1238,7 @@ function viewCheck(r) {
           owe === 1 ? "box" : "boxes"} to export</button>
          <button id="btnBoxCsv">Export clickbox worklist</button>` : ""}
     <label class="rbtn">Import a clickbox run <input id="clickboxRun" type="file" accept=".json" hidden></label>
+    ${odd ? `<button id="btnOddCsv">Export the ${odd} Wavetronix with no BIU</button>` : ""}
     <button id="btnAutoCsv">Export automation worklist</button>
     ${window.showDirectoryPicker ? `<button id="btnNewestRun">${resultsDir
       ? "Newest script run" : "Point at the results folder"}</button>` : ""}
@@ -1232,6 +1246,7 @@ function viewCheck(r) {
     <label class="rbtn">Review script results <input id="autoResults" type="file" accept=".json" hidden></label>
     <span class="note">${open} of ${r.check.length} still open${r.noip.length
       ? `, ${r.noip.length} with no IP in the links sheet` : ""}</span>
+    ${odd ? `<span class="flag">${odd} say Wavetronix with no BIU</span>` : ""}
     ${owe ? `<span class="chip">${owe} ${owe === 1 ? "box" : "boxes"} to export</span>` : ""}
     ${move ? `<span class="chip">${move} exported, not in SharePoint yet</span>` : ""}
     ${failed || undecided ? `<span class="flag">${
@@ -1567,6 +1582,13 @@ function wirePanel() {
   if (boxCsv) boxCsv.onclick = () => downloadCSV("clickbox_worklist.csv",
     [["id", "clickbox_url", "name", "location", "description"]].concat(
       boxesToExport(result.check, state.found).map(e => {
+        const p = boxProperties(e);
+        return [e.id, e.box_url, p.name, p.location, p.description];
+      })));
+  const oddCsv = document.getElementById("btnOddCsv");
+  if (oddCsv) oddCsv.onclick = () => downloadCSV("clickbox_radar_no_biu.csv",
+    [["id", "clickbox_url", "name", "location", "description"]].concat(
+      radarNoBiu(result.check, state.found).map(e => {
         const p = boxProperties(e);
         return [e.id, e.box_url, p.name, p.location, p.description];
       })));
