@@ -6,7 +6,8 @@ import unittest
 
 from fetch_clickbox import (FILES_SUBDIR, PROPERTIES_TAB, RUNS_SUBDIR,
                             clickbox_origin, export_config, fill_and_save, guess,
-                            plan_row, read_worklist, selector, write_results)
+                            nav_error, open_properties, plan_row, read_worklist,
+                            selector, write_results)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
 GOOD = HEAD + '4380,http://192.0.2.1:57150/,076-4380,US 25 at KY 52 (IRVING RD),KYTC D7\n'
@@ -332,6 +333,64 @@ class OutputLayoutTests(unittest.TestCase):
             self.assertEqual(written.parent.name, RUNS_SUBDIR)
             self.assertEqual(sorted(p.name for p in out.iterdir()),
                              [FILES_SUBDIR, RUNS_SUBDIR])
+
+
+class DeadPage:
+    """A clickbox that is not there: every navigation raises, so no frame of it
+    is ever read."""
+
+    def __init__(self, error):
+        self.error, self.tried = error, []
+        self.frames = []
+
+    def goto(self, url, **kw):
+        self.tried.append(url)
+        raise TimeoutError(self.error)
+
+    def wait_for_timeout(self, ms):
+        pass
+
+
+class EmptyPage(DeadPage):
+    """A clickbox that answers, on a screen carrying none of the three fields."""
+
+    def goto(self, url, **kw):
+        self.tried.append(url)
+
+    def wait_for_load_state(self, state, timeout=None):
+        pass
+
+
+class UnreachableTests(unittest.TestCase):
+
+    def test_a_clickbox_that_never_answers_says_so(self):
+        page = DeadPage('Timeout 20000ms exceeded.')
+        frame, _, found, buttons, why = open_properties(page, 'http://192.0.2.1:57150/', 20000)
+        self.assertIsNone(frame)
+        self.assertEqual(found, {})
+        self.assertIn('never answered', why)
+        self.assertIn('timed out', why)
+
+    def test_a_refused_connection_names_the_refusal(self):
+        page = DeadPage('page.goto: net::ERR_CONNECTION_REFUSED at http://192.0.2.1:57150/')
+        _, _, _, _, why = open_properties(page, 'http://192.0.2.1:57150/', 20000)
+        self.assertIn('ERR_CONNECTION_REFUSED', why)
+
+    def test_a_device_that_answers_is_not_called_unreachable(self):
+        # Answering on the wrong screen and not answering at all are different
+        # jobs: one needs the device looked at, the other needs the network.
+        page = EmptyPage('')
+        _, _, _, _, why = open_properties(page, 'http://192.0.2.1:57150/', 20000)
+        self.assertNotIn('never answered', why)
+        self.assertIn('no Name, Location and Description', why)
+
+    def test_the_address_is_never_folded_into_the_reason(self):
+        page = DeadPage('page.goto: net::ERR_CONNECTION_REFUSED at http://10.136.1.193:57150/')
+        _, _, _, _, why = open_properties(page, 'http://10.136.1.193:57150/', 20000)
+        self.assertNotIn('10.136.1.193', why)
+
+    def test_an_error_with_no_text_still_reports_something(self):
+        self.assertEqual(nav_error(ValueError('')), 'ValueError')
 
 
 if __name__ == '__main__':

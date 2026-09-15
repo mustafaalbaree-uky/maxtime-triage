@@ -238,12 +238,13 @@ def show(report, row):
 
 
 def describe(page, row, path, timeout_ms=20000):
-    frame, _, found, _ = open_properties(page, row['clickbox_url'], timeout_ms)
+    frame, _, found, _, why = open_properties(page, row['clickbox_url'], timeout_ms)
     print('\nThe browser has opened %s at port %d.' % (row['id'], CLICKBOX_PORT))
     if frame and len(found) == 3:
         print('It found the Properties screen on its own.')
     else:
-        print('It could not get to Properties by itself. Open that tab by hand.')
+        print('It could not get to Properties by itself: %s.' % why)
+        print('Open that tab by hand if the device is up.')
     print('This script types nothing and presses no Save, Apply or Export.')
     reports = []
     while input('\nPress Enter to describe the screen, or type QUIT: ').strip().upper() != 'QUIT':
@@ -293,6 +294,22 @@ def read_screen(page):
 PROPERTIES_TAB = re.compile(r'^\s*propert(y|ies)\s*$', re.I)
 
 
+def nav_error(exc):
+    """Why a page did not open, short enough to sit in a run record.
+
+    A clickbox that is switched off, on a network the work computer cannot see,
+    or simply slow all arrive here, and they read alike from outside. What the
+    record has to carry is that nothing was reached, not which of those it was.
+    """
+    text = str(exc).splitlines()[0] if str(exc).strip() else type(exc).__name__
+    hit = re.search(r'net::(\w+)', text)
+    if hit:
+        return hit.group(1)
+    if 'Timeout' in text or 'timeout' in text:
+        return 'timed out'
+    return text[:120]
+
+
 def open_properties(page, url, timeout_ms):
     """Get to the Properties screen.
 
@@ -302,12 +319,15 @@ def open_properties(page, url, timeout_ms):
     is deliberately anchored: 'Device Properties' is the heading and
     'Save Device Properties' is the save control, and neither may be hit.
     """
+    reached, failed = False, ''
     for path in ('', '/device.asp'):
         try:
             page.goto(url.rstrip('/') + path, wait_until='domcontentloaded',
                       timeout=timeout_ms)
-        except Exception:
+        except Exception as exc:
+            failed = failed or nav_error(exc)
             continue
+        reached = True
         try:
             page.wait_for_load_state('networkidle', timeout=6000)
         except Exception:
@@ -315,7 +335,7 @@ def open_properties(page, url, timeout_ms):
         page.wait_for_timeout(800)
         got = read_screen(page)
         if got[0]:
-            return got
+            return got + ('',)
         for frame in page.frames:
             try:
                 frame.get_by_text(PROPERTIES_TAB).first.click(timeout=4000)
@@ -324,8 +344,11 @@ def open_properties(page, url, timeout_ms):
             frame.wait_for_timeout(1200)
             got = read_screen(page)
             if got[0]:
-                return got
-    return None, None, {}, {}
+                return got + ('',)
+    why = ('reached the device, but no Name, Location and Description on any screen'
+           if reached else
+           'the clickbox never answered at port %d (%s)' % (CLICKBOX_PORT, failed))
+    return None, None, {}, {}, why
 
 
 def plan_row(found, row):
@@ -423,11 +446,11 @@ def process_one(context, row, args, run):
                exported='', skipped='', error='', note='')
     page = context.new_page()
     try:
-        frame, report, found, buttons = open_properties(
+        frame, report, found, buttons, why = open_properties(
             page, row['clickbox_url'], int(args.timeout * 1000))
         if not frame:
-            rec['error'] = ('could not reach the Properties screen, or it does not '
-                            'carry Name, Location and Description')
+            rec['error'] = why
+            print('  %s' % why)
             return rec
         if not buttons.get('save'):
             rec['error'] = 'no Save Device Properties on this screen'
@@ -486,6 +509,10 @@ def summarise(records, path):
         print('\nOverwritten, worth putting in the row note in box.html:')
         for r in notes:
             print('  %-6s %s' % (r['id'], r['note']))
+    dead = [r for r in records if 'never answered' in r['error']]
+    if dead:
+        print('\nNo answer at port %d. To try these again:' % CLICKBOX_PORT)
+        print('  --only %s' % ','.join(r['id'] for r in dead))
     print('\nRun written to %s' % path)
 
 

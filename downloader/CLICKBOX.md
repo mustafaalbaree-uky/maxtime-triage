@@ -115,7 +115,26 @@ check list is listed in the report rather than applied.
 
 `--limit` defaults to 1, so the first run of a session is one device unless you
 ask for more. `--timeout` is how long a clickbox gets to answer, 20 seconds by
-default; one that does not answer is recorded and the run moves on.
+default.
+
+## A clickbox that never answers
+
+Some of them time out. That is a result like any other, so it is written into
+the run record with the reason, either `timed out` or whatever the browser
+said (`ERR_CONNECTION_REFUSED`, `ERR_ADDRESS_UNREACHABLE`), and the run carries
+on to the next signal:
+
+```json
+{ "id": "4002", "exported": "", "error":
+  "the clickbox never answered at port 57150 (timed out)" }
+```
+
+Answering on a screen that does not carry the three properties is reported
+separately, since that one needs the device looked at rather than the network.
+
+The end of the run groups the ones that never answered and prints the `--only`
+line to try them again. Importing the run into `box.html` leaves those rows
+exactly as they were and lists them in the report with the reason.
 
 ## Looking without touching
 

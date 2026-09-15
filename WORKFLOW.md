@@ -178,6 +178,9 @@ Press **BIU, box** or **no BIU** for each. A box reveals the `:57150` link and
 a tick box for once the export is in SharePoint. What you press is saved in
 the browser and survives closing the page.
 
+A clickbox that never answers is recorded with the reason and the run carries
+on; importing that run leaves the row untouched and lists it.
+
 A row answered **BIU, box** carries two ticks, not one: **exported off the
 device** and **moved to SharePoint**. They are separate days' work, and only the
 second writes YES into the sheet's Box Verified column. Importing a run of
