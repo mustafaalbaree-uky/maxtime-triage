@@ -596,11 +596,11 @@ function byName(a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; }
    column pastes row aligned over the sheet's own column. What the sheet
    already says is the base and always survives unless a field result was
    recorded for that signal. Autofill only ever fills a blank cell. */
-const AUTO_VERIFIED = "already in sharepoint";
-/* A cell this tool decided carries who decided it. A cell the sheet already
-   fills is copied through untouched, and one the folder listing fills on its
-   own is not ours to sign: that file may predate the work. */
+/* Every Box Verified cell this tool fills carries who filled it, so the sheet
+   says where the line came from. A cell the sheet already fills is copied
+   through untouched and is never signed. */
 const BY_INTERN = " (added by intern)";
+const AUTO_VERIFIED = "already in sharepoint" + BY_INTERN;
 
 function computeColumns(result, master, meta, found) {
   if (!meta) return null;
@@ -661,6 +661,7 @@ function computeColumns(result, master, meta, found) {
     else if (f && f.biu === "no" && !base.boxdone) { bd = "N/A" + BY_INTERN; bdKind = "field"; }
     else if (e.files.length && isExported(f)) { bd = "YES" + BY_INTERN; bdKind = "field"; }
     else if (e.files.length && !base.boxdone) { bd = AUTO_VERIFIED; bdKind = "auto"; }
+    /* base, and blank, stays blank: nothing here decided it */
     out.boxdone.push(mk("boxdone", bd, bdKind));
   }
   return out;
