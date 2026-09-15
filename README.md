@@ -191,7 +191,8 @@ and Description is `KYTC D7` on every device. The box page shows all three on
 the row with a copy button each, and exports them as `clickbox_worklist.csv`.
 
 A row answered BIU, box carries two ticks rather than one: exported off the
-device, and moved to SharePoint. Only the second writes YES into the sheet's
+device, and moved to SharePoint. Only the second writes
+`YES (added by intern)` into the sheet's
 Box Verified column. Importing a run of the script ticks the first, and carries
 across whatever the device overwrote as the row's note.
 

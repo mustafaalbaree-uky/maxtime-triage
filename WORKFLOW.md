@@ -191,10 +191,18 @@ browser, and writes the ones that do not into a run record, so importing it
 puts the reason on each of those rows without a browser going near them.
 
 A row answered **BIU, box** carries two ticks, not one: **exported off the
-device** and **moved to SharePoint**. They are separate days' work, and only the
-second writes YES into the sheet's Box Verified column. Importing a run of
-`fetch_clickbox.py` ticks the first for you; nothing but you can tick the
-second. See `downloader/CLICKBOX.md`.
+device** and **moved to SharePoint**. They are separate days' work, and only
+the second writes `YES (added by intern)` into the sheet's Box Verified column.
+Importing a run of `fetch_clickbox.py` ticks the first for you; nothing but you
+can tick the second. See `downloader/CLICKBOX.md`.
+
+Cells this tool decides carry who decided them. `YES (added by intern)` for a
+box you filed, `N/A (added by intern)` for one you answered no BIU on, and a
+signal whose file you exported reads that way once the file is in the folder,
+even though its row has left the check list by then. A cell the sheet already
+fills is copied through untouched, and a file in the folder that owes nothing
+to this tool still reads `already in sharepoint`, since it may predate the
+work.
 
 Where neither answer applies, a login that failed for instance, type it in the
 row's note box instead. On a row with no BIU answer, the note is what the Box

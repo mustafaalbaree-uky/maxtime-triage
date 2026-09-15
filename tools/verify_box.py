@@ -128,6 +128,26 @@ const out = {
     for (const u of clickboxUpdates(retry, r.check, after)) by[u.id + " retried"] = u;
     return by;
   })(),
+
+  signed: (() => {
+    /* which Box Verified cells carry who decided them, and which do not */
+    const ids = r.check.slice(0, 2).map(e => e.id);
+    const pick = (found, id) => {
+      const c = computeColumns(r, master, meta, found);
+      const hit = c.boxdone.find(x => x.id === id);
+      return hit ? { out: hit.out, kind: hit.kind } : null;
+    };
+    return {
+      moved: pick({ [ids[0]]: { biu: "yes", saved: true } }, ids[0]),
+      noBox: pick({ [ids[1]]: { biu: "no" } }, ids[1]),
+      exportedNotMoved: pick({ [ids[0]]: { biu: "yes", exported: true } }, ids[0]),
+      folderOnly: (() => {
+        const auto = computeColumns(r, master, meta, {}).boxdone.find(x => x.kind === "auto");
+        return auto ? { id: auto.id, out: auto.out,
+          afterOurExport: pick({ [auto.id]: { biu: "yes", exported: true } }, auto.id) } : null;
+      })(),
+    };
+  })(),
 };
 console.log(JSON.stringify(out, null, 2));
 """
