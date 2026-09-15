@@ -191,10 +191,11 @@ and Description is `KYTC D7` on every device. The box page shows all three on
 the row with a copy button each, and exports them as `clickbox_worklist.csv`.
 
 A row answered BIU, box carries two ticks rather than one: exported off the
-device, and moved to SharePoint. Only the second writes
-`YES (added by intern)` into the sheet's
+device, and moved to SharePoint. Only the second writes `YES` into the sheet's
 Box Verified column. Importing a run of the script ticks the first, and carries
-across whatever the device overwrote as the row's note.
+across whatever the device overwrote as the row's note. Every cell the page
+fills in any of the three columns is signed `(added by intern)`; a cell the
+sheet already fills is copied through untouched.
 
 [`downloader/fetch_clickbox.py`](downloader/fetch_clickbox.py) fills those
 three fields and exports the configuration, one device at a time and only after

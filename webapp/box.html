@@ -596,11 +596,14 @@ function byName(a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; }
    column pastes row aligned over the sheet's own column. What the sheet
    already says is the base and always survives unless a field result was
    recorded for that signal. Autofill only ever fills a blank cell. */
-/* Every Box Verified cell this tool fills carries who filled it, so the sheet
-   says where the line came from. A cell the sheet already fills is copied
-   through untouched and is never signed. */
+/* Every cell this tool fills carries who filled it, so the sheet says where
+   the line came from. A cell the sheet already fills is copied through
+   untouched and is never signed, and neither is a blank one. */
 const BY_INTERN = " (added by intern)";
-const AUTO_VERIFIED = "already in sharepoint" + BY_INTERN;
+function signed(value, kind) {
+  return (kind === "field" || kind === "auto") && S(value) ? value + BY_INTERN : value;
+}
+const AUTO_VERIFIED = "already in sharepoint";
 
 function computeColumns(result, master, meta, found) {
   if (!meta) return null;
@@ -623,7 +626,7 @@ function computeColumns(result, master, meta, found) {
     const f = (e && found) ? found[S(m.id)] : null;
     const mk = (key, value, kind) =>
       ({ row: r, id: m ? S(m.id) : "", s1: m ? m.s1 : "", s2: m ? m.s2 : "",
-         county: m ? m.county : "", base: base[key], out: value,
+         county: m ? m.county : "", base: base[key], out: signed(value, kind),
          kind: kind || "base" });
 
     if (!m || !e) {          /* out of jurisdiction, no ID, or a duplicate row */
@@ -657,9 +660,9 @@ function computeColumns(result, master, meta, found) {
        this tool exported is that export, filed: it says so in those words
        rather than as a file that was already there. */
     let bd = base.boxdone, bdKind = "base";
-    if (f && f.saved) { bd = "YES" + BY_INTERN; bdKind = "field"; }
-    else if (f && f.biu === "no" && !base.boxdone) { bd = "N/A" + BY_INTERN; bdKind = "field"; }
-    else if (e.files.length && isExported(f)) { bd = "YES" + BY_INTERN; bdKind = "field"; }
+    if (f && f.saved) { bd = "YES"; bdKind = "field"; }
+    else if (f && f.biu === "no" && !base.boxdone) { bd = "N/A"; bdKind = "field"; }
+    else if (e.files.length && isExported(f)) { bd = "YES"; bdKind = "field"; }
     else if (e.files.length && !base.boxdone) { bd = AUTO_VERIFIED; bdKind = "auto"; }
     /* base, and blank, stays blank: nothing here decided it */
     out.boxdone.push(mk("boxdone", bd, bdKind));
@@ -1209,7 +1212,7 @@ function viewCheck(r) {
         ticks that for you.</li>
       <li>Put the file in the SharePoint clickbox configuration folder, then tick
         <b>moved to SharePoint</b>. Only that tick writes
-        <code>YES (added by intern)</code> to the sheet's Box Verified column.</li>
+        <code>YES</code> to the sheet's Box Verified column.</li>
     </ol>
   </div>
   <div class="bar">

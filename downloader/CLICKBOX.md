@@ -139,8 +139,7 @@ typed yourself is neither written over nor removed: the report says the row
 kept it.
 
 It never ticks **moved to SharePoint**. Nothing but you moving the file can say
-that, and only that tick writes `YES (added by intern)` into the sheet's Box
-Verified column. A
+that, and only that tick writes `YES` into the sheet's Box Verified column. A
 record that was skipped by hand, or an ID that is not in the current check
 list, is listed in the report rather than applied.
 

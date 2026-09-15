@@ -137,7 +137,22 @@ const out = {
       const hit = c.boxdone.find(x => x.id === id);
       return hit ? { out: hit.out, kind: hit.kind } : null;
     };
+    const pickCol = (col, found, id) => {
+      const hit = computeColumns(r, master, meta, found)[col].find(x => x.id === id);
+      return hit ? { out: hit.out, kind: hit.kind } : null;
+    };
+    const untouched = computeColumns(r, master, meta, {});
     return {
+      /* a sheet that says Loops is corrected, and the correction is signed */
+      detection: (() => {
+        const loops = r.check.find(e => /loop/i.test(
+          (master.find(m => String(m.id) === String(e.id)) || {}).detection || ""));
+        return loops ? pickCol("det", { [loops.id]: { biu: "yes" } }, loops.id) : null;
+      })(),
+      boxfr: pickCol("boxfr", { [ids[0]]: { biu: "yes" } }, ids[0]),
+      /* nothing this tool decided means nothing signed */
+      signedBaseCells: ["det", "boxfr", "boxdone"].reduce((n, k) =>
+        n + untouched[k].filter(x => x.kind === "base" && /added by intern/.test(x.out)).length, 0),
       moved: pick({ [ids[0]]: { biu: "yes", saved: true } }, ids[0]),
       noBox: pick({ [ids[1]]: { biu: "no" } }, ids[1]),
       exportedNotMoved: pick({ [ids[0]]: { biu: "yes", exported: true } }, ids[0]),
