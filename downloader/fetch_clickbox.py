@@ -363,8 +363,16 @@ def plan_row(found, row):
     return out
 
 
-def confirm(row, plan):
-    """Nothing is typed into a device without this returning True."""
+def confirm(row, plan, auto=False, auto_replace=False):
+    """Nothing is typed into a device without this returning 'y'.
+
+    `auto` answers for the fills, where the values are derived from the sheets
+    and the field is empty, so there is one right answer and it is the same
+    every time. A field already holding something that disagrees with the
+    sheets is not that: the device is saying something the sheets are not, and
+    which of the two is wrong is a person's call. Those still stop, unless
+    `auto_replace` says otherwise.
+    """
     replacing = [k for k, p in plan.items() if p['action'] == 'replace']
     filling = [k for k, p in plan.items() if p['action'] == 'fill']
     print('\n' + '=' * 68)
@@ -385,9 +393,14 @@ def confirm(row, plan):
     if not replacing and not filling:
         print('  Nothing to type. Exporting only.')
     print('=' * 68)
-    prompt = 'Type y to %s, n to skip this signal, q to stop: ' % (
-        'export' if not (replacing or filling) else
-        'REPLACE and save, then export' if replacing else 'fill in, save, then export')
+    what = ('export' if not (replacing or filling) else
+            'REPLACE and save, then export' if replacing else 'fill in, save, then export')
+    if auto and (auto_replace or not replacing):
+        print('  auto: %s.' % what)
+        return 'y'
+    if auto:
+        print('  auto does not replace a value the device already carries.')
+    prompt = 'Type y to %s, n to skip this signal, q to stop: ' % what
     while True:
         answer = input(prompt).strip().lower()
         if answer in ('y', 'n', 'q'):
@@ -443,7 +456,7 @@ def export_config(page, frame, buttons, out_dir, signal_id):
 def process_one(context, row, args, run):
     """One clickbox. Returns the record. Raises nothing the batch cannot survive."""
     rec = dict(id=row['id'], at=run, typed={}, before={}, after={},
-               exported='', skipped='', error='', note='')
+               exported='', skipped='', error='', note='', confirmed='by hand')
     page = context.new_page()
     try:
         frame, report, found, buttons, why = open_properties(
@@ -457,7 +470,10 @@ def process_one(context, row, args, run):
             return rec
         plan = plan_row(found, row)
         rec['before'] = {k: plan[k]['current'] for k in WANTED}
-        answer = confirm(row, plan)
+        asked = not (args.auto and (args.auto_replace
+                                    or not any(p['action'] == 'replace' for p in plan.values())))
+        rec['confirmed'] = 'by hand' if asked else 'auto'
+        answer = confirm(row, plan, args.auto, args.auto_replace)
         if answer == 'q':
             rec['skipped'] = 'stopped here'
             return rec
@@ -528,6 +544,11 @@ def main():
                     help='Holds %s (the configurations) and %s (what each run did)'
                          % (FILES_SUBDIR, RUNS_SUBDIR))
     ap.add_argument('--browser', choices=['msedge', 'chrome', 'chromium'], default='msedge')
+    ap.add_argument('--auto', action='store_true',
+                    help='Fill in, save and export without asking. A field that already '
+                         'disagrees with the sheets still stops and waits')
+    ap.add_argument('--auto-replace', action='store_true',
+                    help='Implies --auto, and replaces a disagreeing value without asking')
     ap.add_argument('--timeout', type=float, default=20,
                     help='Seconds to wait for a clickbox to answer (default: 20)')
     group = ap.add_mutually_exclusive_group()
@@ -535,6 +556,7 @@ def main():
                        help='Clickboxes to work through (default: 1)')
     group.add_argument('--all', action='store_true', help='The whole worklist')
     args = ap.parse_args()
+    args.auto = args.auto or args.auto_replace
 
     rows = read_worklist(args.csv)
     if args.only:
@@ -562,8 +584,11 @@ def main():
                     print('  %-12s %s' % (word, row[key]))
                 describe(context.new_page(), row, args.out, int(args.timeout * 1000))
                 return 0
-            print('%d clickbox%s. Each one asks before anything is typed.'
-                  % (len(rows), '' if len(rows) == 1 else 'es'))
+            print('%d clickbox%s. %s' % (
+                len(rows), '' if len(rows) == 1 else 'es',
+                'Nothing asks first, including a value that disagrees.' if args.auto_replace
+                else 'Only a value that disagrees with the sheets asks first.' if args.auto
+                else 'Each one asks before anything is typed.'))
             print('Configurations land in %s' % (args.out_dir / FILES_SUBDIR).resolve())
             print('The record of the run goes in %s' % (args.out_dir / RUNS_SUBDIR).resolve())
             records = []

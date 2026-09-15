@@ -46,7 +46,28 @@ py fetch_clickbox.py clickbox_worklist.csv --all        the whole worklist
 Add `--browser chromium` if Edge cannot be controlled on your computer, after
 `py -m playwright install chromium`. On Mac or Linux use `python3` for `py`.
 
-Every device asks before anything is typed:
+## Without stopping at every device
+
+```
+py fetch_clickbox.py clickbox_worklist.csv --all --auto
+```
+
+`--auto` answers `y` for you wherever the field is empty. Those values are
+derived from the sheets by the same rule every time, and the row prints before
+it is typed, so the run still shows what went in.
+
+It does not answer for a field that already holds something the sheets
+disagree with. The device is saying something the sheets are not, and which of
+the two is right is not something a flag can settle, so those stop and wait as
+before. `--auto-replace` answers for those too and is the only way to have a
+run overwrite a value nobody looked at.
+
+The run record says which it was, `"confirmed": "auto"` or `"by hand"`, per
+signal.
+
+## Asking at every device
+
+Without `--auto`, every device asks before anything is typed:
 
 ```
 ====================================================================

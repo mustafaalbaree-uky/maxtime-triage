@@ -197,8 +197,10 @@ across whatever the device overwrote as the row's note.
 
 [`downloader/fetch_clickbox.py`](downloader/fetch_clickbox.py) fills those
 three fields and exports the configuration, one device at a time and only after
-you answer `y` for that signal. A field already holding something different is
-called out and needs its own `y`, and what it replaced is recorded. Nothing
+you answer `y` for that signal, or without asking under `--auto`. A field
+already holding something different is called out and needs its own `y` either
+way, and what it replaced is recorded. A device that never answers is recorded
+with the reason and the run carries on. Nothing
 else on that screen is touched, and a device that does not show the value back
 after saving is reported rather than exported. Configurations land in one
 folder of their own, named by the device, with the record of each run kept in a

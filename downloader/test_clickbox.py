@@ -3,11 +3,12 @@ import contextlib
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from fetch_clickbox import (FILES_SUBDIR, PROPERTIES_TAB, RUNS_SUBDIR,
                             clickbox_origin, export_config, fill_and_save, guess,
-                            nav_error, open_properties, plan_row, read_worklist,
-                            selector, write_results)
+                            confirm, nav_error, open_properties, plan_row,
+                            read_worklist, selector, write_results)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
 GOOD = HEAD + '4380,http://192.0.2.1:57150/,076-4380,US 25 at KY 52 (IRVING RD),KYTC D7\n'
@@ -391,6 +392,44 @@ class UnreachableTests(unittest.TestCase):
 
     def test_an_error_with_no_text_still_reports_something(self):
         self.assertEqual(nav_error(ValueError('')), 'ValueError')
+
+
+class AutoTests(unittest.TestCase):
+    """--auto answers for itself. What it may and may not answer for."""
+
+    EMPTY = {'name': field(id='deviceName', value=''),
+             'location': field(id='deviceLocation', value=''),
+             'description': field(id='deviceDescription', value='')}
+    DISAGREES = {'name': field(id='deviceName', value='076-4030'),
+                 'location': field(id='deviceLocation', value=''),
+                 'description': field(id='deviceDescription', value='')}
+
+    def answer(self, found, **kw):
+        plan = plan_row(found, ROW)
+        with mock.patch('builtins.input', side_effect=AssertionError('it asked')) as asked:
+            if kw.get('expect_ask'):
+                asked.side_effect = ['y']
+            return confirm(ROW, plan, auto=True, auto_replace=kw.get('auto_replace', False))
+
+    def test_empty_fields_are_filled_without_asking(self):
+        self.assertEqual(self.answer(self.EMPTY), 'y')
+
+    def test_a_device_already_correct_exports_without_asking(self):
+        found = {k: field(id='device' + k.title(), value=ROW[k]) for k in ROW if k != 'id'}
+        self.assertEqual(self.answer(found), 'y')
+
+    def test_a_disagreeing_value_still_stops_under_auto(self):
+        # The device says one thing and the sheets say another. Which is wrong
+        # is not something a flag can settle.
+        self.assertEqual(self.answer(self.DISAGREES, expect_ask=True), 'y')
+
+    def test_auto_replace_answers_for_the_disagreement_too(self):
+        self.assertEqual(self.answer(self.DISAGREES, auto_replace=True), 'y')
+
+    def test_without_auto_even_an_empty_field_asks(self):
+        plan = plan_row(self.EMPTY, ROW)
+        with mock.patch('builtins.input', side_effect=['n']):
+            self.assertEqual(confirm(ROW, plan), 'n')
 
 
 if __name__ == '__main__':
