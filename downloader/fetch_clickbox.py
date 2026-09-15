@@ -582,22 +582,43 @@ def knock(url, timeout):
         return (exc.strerror or type(exc).__name__).lower()
 
 
-def ping(rows, timeout):
-    """Knock on every address, several at once, and report."""
+KNOCK_REASON = {
+    'silent': 'nothing answered at port %d' % CLICKBOX_PORT,
+    'refused': 'the address is there and port %d is shut' % CLICKBOX_PORT,
+}
+
+
+def ping(rows, timeout, args, run):
+    """Knock on every address, several at once, report, and write the ones that
+    did not answer into a run record.
+
+    The record is what puts the reason on the row in box.html. Without it the
+    only way to get a note onto a clickbox that is not there is to point the
+    browser at it and sit through the timeout, once per signal.
+    """
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=16) as pool:
         states = list(pool.map(lambda r: knock(r['clickbox_url'], timeout), rows))
-    live = []
+    live, records = [], []
     for row, state in zip(rows, states):
         print('  %-6s %-10s %s' % (row['id'], state, urlsplit(row['clickbox_url']).hostname))
         if state == 'answers':
             live.append(row['id'])
+            continue
+        records.append(dict(id=row['id'], at=run, typed={}, before={}, after={},
+                            exported='', skipped='', confirmed='ping',
+                            error=KNOCK_REASON.get(state, 'could not reach the address (%s)'
+                                                   % state), note=''))
     print('\n%d of %d answered on port %d.' % (len(live), len(rows), CLICKBOX_PORT))
     if live:
         print('To work through those:\n  --only %s' % ','.join(live))
-    if len(live) < len(rows):
+    if records:
         print('The rest are switched off, on a network this computer cannot see, or')
         print('not running anything on that port. None of that is fixed by the browser.')
+        path = write_results(args, run, records)
+        print('\n%d written to %s' % (len(records), path))
+        print('Import it in box.html and each of those rows says why, with no')
+        print('browser opened at any of them.')
     return 0
 
 
@@ -712,13 +733,13 @@ def main():
     if not args.describe and not args.all and not args.ping:
         rows = rows[:max(1, args.limit)]
 
+    run = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     if args.ping:
         print('Knocking on %d address%s. Nothing is opened and nothing is typed.'
               % (len(rows), '' if len(rows) == 1 else 'es'))
-        return ping(rows, min(args.timeout, 5))
+        return ping(rows, min(args.timeout, 5), args, run)
 
     from playwright.sync_api import sync_playwright
-    run = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,

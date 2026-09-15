@@ -213,6 +213,18 @@ To work through those:
 
 Run it on the whole worklist, or on the failures alone with `--failed`.
 
+The ones that did not answer are written into a run record like any other run,
+so importing it in box.html puts the reason on each of those rows at once:
+
+```
+11 written to clickbox-exports/runs/clickbox-run-20260915T170139Z.json
+```
+
+Nothing that answered is in that record, and a ping never says anything
+exported, since it opened no browser. Those rows keep their place in the check
+list, carry the reason as their note, and go to the back of the next run's
+list.
+
 ## A field the device cannot hold
 
 The Click 656 caps Location at 32 characters and cuts the rest off as the

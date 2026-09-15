@@ -6,10 +6,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from fetch_clickbox import (FILES_SUBDIR, PROPERTIES_TAB, RUNS_SUBDIR,
+from fetch_clickbox import (CLICKBOX_PORT, FILES_SUBDIR, PROPERTIES_TAB, RUNS_SUBDIR,
                             clickbox_origin, export_config, guess,
                             already_exported, confirm, nav_error, open_properties,
-                            fill_and_save, fit, knock, order_rows, plan_row,
+                            fill_and_save, fit, knock, order_rows, ping, plan_row,
                             read_worklist, run_memory, selector, write_results)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
@@ -599,6 +599,55 @@ class KnockTests(unittest.TestCase):
             self.assertEqual(knock('http://127.0.0.1:%d/' % s.getsockname()[1], 2), 'answers')
         finally:
             s.close()
+
+
+class PingRecordTests(unittest.TestCase):
+    """A clickbox that is not there has to leave a trace, or the only way to
+    get the reason onto its row is to sit through the browser's timeout."""
+
+    def listening(self):
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        s.listen(1)
+        self.addCleanup(s.close)
+        return 'http://127.0.0.1:%d/' % s.getsockname()[1]
+
+    def closed(self):
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+        s.close()
+        return 'http://127.0.0.1:%d/' % port
+
+    def run_ping(self, rows, d):
+        out = Path(d) / 'clickbox-exports'
+        ping(rows, 1, Args(out), '20260915T120000Z')
+        return out
+
+    def test_only_the_ones_that_did_not_answer_are_recorded(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.run_ping([{'id': '4041', 'clickbox_url': self.listening()},
+                                 {'id': '4002', 'clickbox_url': self.closed()}], d)
+            exported, failed = run_memory(out)
+            self.assertEqual(exported, {})
+            self.assertEqual(sorted(failed), ['4002'])
+
+    def test_the_reason_is_what_lands_on_the_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.run_ping([{'id': '4002', 'clickbox_url': self.closed()}], d)
+            _, failed = run_memory(out)
+            self.assertIn(str(CLICKBOX_PORT), failed['4002'])
+
+    def test_a_ping_never_says_anything_exported(self):
+        # It opened no browser, so it cannot have got a file off anything.
+        with tempfile.TemporaryDirectory() as d:
+            out = self.run_ping([{'id': '4002', 'clickbox_url': self.closed()}], d)
+            self.assertEqual(run_memory(out)[0], {})
+
+    def test_nothing_is_written_when_everything_answers(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self.run_ping([{'id': '4041', 'clickbox_url': self.listening()}], d)
+            self.assertFalse((out / RUNS_SUBDIR).exists())
 
 
 if __name__ == '__main__':
