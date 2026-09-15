@@ -183,7 +183,8 @@ on; importing that run puts the reason on the row as its note and leaves the
 signal in the list. `--auto` works through the list without stopping, except at
 a device whose fields already disagree with the sheets. A signal an earlier run
 already exported is skipped, so a worklist exported before that run cannot
-cause a second visit.
+cause a second visit, and one that failed goes to the back of the list so it
+cannot fill a limited run. `--failed` works through those alone.
 
 A row answered **BIU, box** carries two ticks, not one: **exported off the
 device** and **moved to SharePoint**. They are separate days' work, and only the

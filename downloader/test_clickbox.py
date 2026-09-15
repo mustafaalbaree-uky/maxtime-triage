@@ -8,7 +8,8 @@ from unittest import mock
 from fetch_clickbox import (FILES_SUBDIR, PROPERTIES_TAB, RUNS_SUBDIR,
                             clickbox_origin, export_config, fill_and_save, guess,
                             already_exported, confirm, nav_error, open_properties,
-                            plan_row, read_worklist, selector, write_results)
+                            order_rows, plan_row, read_worklist, run_memory, selector,
+                            write_results)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
 GOOD = HEAD + '4380,http://192.0.2.1:57150/,076-4380,US 25 at KY 52 (IRVING RD),KYTC D7\n'
@@ -364,6 +365,14 @@ class EmptyPage(DeadPage):
 
 class UnreachableTests(unittest.TestCase):
 
+    def test_a_dead_address_is_waited_on_once_not_twice(self):
+        # Two paths are tried on a device that answers. On one that does not,
+        # the second is the same wait for the same silence, and a list of
+        # twenty pays for it twenty times.
+        page = DeadPage('Timeout 20000ms exceeded.')
+        open_properties(page, 'http://192.0.2.1:57150/', 20000)
+        self.assertEqual(len(page.tried), 1)
+
     def test_a_clickbox_that_never_answers_says_so(self):
         page = DeadPage('Timeout 20000ms exceeded.')
         frame, _, found, buttons, why = open_properties(page, 'http://192.0.2.1:57150/', 20000)
@@ -481,6 +490,51 @@ class MemoryTests(unittest.TestCase):
             (out / RUNS_SUBDIR / 'clickbox-run-x.json').write_text(
                 '{"schema": "maxtime-biu-v1", "results": [{"id": "4030", "exported": "a"}]}')
             self.assertEqual(already_exported(out), {})
+
+
+class OrderTests(unittest.TestCase):
+    """20 devices a session, and the ones that time out do it again every time.
+    Left at the front they are the only 20 that ever get tried."""
+
+    ROWS = [{'id': str(4000 + i)} for i in range(6)]
+
+    def ids(self, exported, failed):
+        rows, said = order_rows(self.ROWS, exported, failed)
+        return [r['id'] for r in rows], said
+
+    def test_failures_go_to_the_back_not_out(self):
+        got, _ = self.ids({}, {'4000': 'timed out', '4001': 'timed out'})
+        self.assertEqual(got, ['4002', '4003', '4004', '4005', '4000', '4001'])
+
+    def test_a_limited_run_reaches_the_untried_ones(self):
+        got, _ = self.ids({}, {'4000': 'timed out', '4001': 'timed out'})
+        self.assertEqual(got[:2], ['4002', '4003'])
+
+    def test_exported_ones_are_dropped_entirely(self):
+        got, _ = self.ids({'4002': 'run.json'}, {})
+        self.assertNotIn('4002', got)
+
+    def test_a_signal_that_later_exported_is_no_longer_a_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / 'clickbox-exports'
+            write_results(Args(out), '20260915T120000Z',
+                          [dict(id='4030', exported='', skipped='', error='timed out', note='')])
+            write_results(Args(out), '20260915T130000Z',
+                          [dict(id='4030', exported='files/a.cbx', skipped='', error='', note='')])
+            exported, failed = run_memory(out)
+            self.assertEqual(sorted(exported), ['4030'])
+            self.assertEqual(failed, {})
+
+    def test_nothing_is_said_when_nothing_moved(self):
+        got, said = self.ids({}, {})
+        self.assertEqual(got, [r['id'] for r in self.ROWS])
+        self.assertEqual(said, [])
+
+    def test_a_list_that_is_all_failures_keeps_its_order(self):
+        # Nothing to put them behind, so the run is the retry.
+        got, said = self.ids({}, {r['id']: 'timed out' for r in self.ROWS})
+        self.assertEqual(got, [r['id'] for r in self.ROWS])
+        self.assertEqual(said, [])
 
 
 if __name__ == '__main__':

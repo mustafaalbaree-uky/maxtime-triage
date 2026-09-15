@@ -325,8 +325,11 @@ def open_properties(page, url, timeout_ms):
             page.goto(url.rstrip('/') + path, wait_until='domcontentloaded',
                       timeout=timeout_ms)
         except Exception as exc:
-            failed = failed or nav_error(exc)
-            continue
+            # Nothing answered at the address at all, so the second path is the
+            # same wait for the same silence. A 404 does not come through here;
+            # only a network error or a timeout does.
+            failed = nav_error(exc)
+            break
         reached = True
         try:
             page.wait_for_load_state('networkidle', timeout=6000)
@@ -504,15 +507,17 @@ def process_one(context, row, args, run):
         page.close()
 
 
-def already_exported(out_dir):
-    """Signal IDs that a previous run already got a file off.
+def run_memory(out_dir):
+    """What previous runs already settled: the signals that produced a file,
+    and the signals that were tried and failed.
 
     The worklist is exported from box.html before the run and reflects what the
     page knew then, so a worklist made before the last run still carries what
     that run finished. The device names the configurations itself, so the files
-    folder cannot be read for this; the run records can.
+    folder cannot be read for this; the run records can. Records are read in
+    stamp order, so the last word on a signal is the one that counts.
     """
-    done = {}
+    exported, failed = {}, {}
     runs = Path(out_dir) / RUNS_SUBDIR
     for path in sorted(runs.glob('clickbox-run-*.json')) if runs.is_dir() else []:
         try:
@@ -522,9 +527,43 @@ def already_exported(out_dir):
         if payload.get('schema') != SCHEMA:
             continue
         for rec in payload.get('results') or []:
-            if rec.get('exported') and rec.get('id'):
-                done.setdefault(str(rec['id']), path.name)
-    return done
+            sid = str(rec.get('id') or '')
+            if not sid:
+                continue
+            if rec.get('exported'):
+                exported.setdefault(sid, path.name)
+            elif rec.get('error'):
+                failed[sid] = str(rec['error'])
+    return exported, {k: v for k, v in failed.items() if k not in exported}
+
+
+def already_exported(out_dir):
+    """Signal IDs a previous run already got a file off."""
+    return run_memory(out_dir)[0]
+
+
+def order_rows(rows, exported, failed):
+    """The worklist as this run should work through it, and what to say about it.
+
+    A signal that already produced a file is dropped. A signal that failed goes
+    to the back rather than out: it is still owed, but a device that times out
+    does it again next time, and with --limit that is enough to fill every run
+    with the same failures while signals nobody has tried yet are never reached.
+    """
+    said = []
+    keep = [r for r in rows if r['id'] not in exported]
+    if len(keep) != len(rows):
+        said.append('%d already exported by an earlier run, skipping %s.'
+                    % (len(rows) - len(keep),
+                       ','.join(r['id'] for r in rows if r['id'] in exported)))
+        said.append('--again works through them anyway. --only names one whatever '
+                    'this says.')
+    fresh = [r for r in keep if r['id'] not in failed]
+    again = [r for r in keep if r['id'] in failed]
+    if again and fresh:
+        said.append('%d failed in an earlier run, moved to the back of the list. '
+                    '--failed works through those alone.' % len(again))
+    return fresh + again, said
 
 
 def write_results(args, run, records):
@@ -574,6 +613,8 @@ def main():
                     help='Implies --auto, and replaces a disagreeing value without asking')
     ap.add_argument('--again', action='store_true',
                     help='Work through signals an earlier run already exported')
+    ap.add_argument('--failed', action='store_true',
+                    help='Work through only the signals an earlier run failed on')
     ap.add_argument('--timeout', type=float, default=20,
                     help='Seconds to wait for a clickbox to answer (default: 20)')
     group = ap.add_mutually_exclusive_group()
@@ -590,15 +631,18 @@ def main():
     if not rows:
         print('Nothing in the worklist matches.')
         return 2
-    if not args.describe and not args.only and not args.again:
-        done = already_exported(args.out_dir)
-        keep = [r for r in rows if r['id'] not in done]
-        if len(keep) != len(rows):
-            print('%d already exported by an earlier run, skipping %s.'
-                  % (len(rows) - len(keep),
-                     ','.join(r['id'] for r in rows if r['id'] in done)))
-            print('--again works through them anyway. --only names one whatever this says.')
-            rows = keep
+    exported, failed = ({}, {}) if args.describe else run_memory(args.out_dir)
+    if args.failed:
+        rows = [r for r in rows if r['id'] in failed]
+        if not rows:
+            print('No signal in this worklist failed in an earlier run.')
+            return 0
+        print('%d that failed before. The reason each one gave is in the run records.'
+              % len(rows))
+    elif not args.describe and not args.only and not args.again:
+        rows, said = order_rows(rows, exported, failed)
+        for line in said:
+            print(line)
         if not rows:
             print('Nothing left in this worklist. Import the runs into box.html '
                   'and export a new one.')

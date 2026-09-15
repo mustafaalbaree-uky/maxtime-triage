@@ -156,6 +156,30 @@ records and skips those signals rather than visiting them twice:
 records say. Both read `clickbox-exports/runs/`, so `--out-dir` moves the
 memory with the files.
 
+## The ones that keep timing out
+
+A device that times out does it again on the next run, so with `--limit 20` the
+same twenty failures would fill every run and the signals nobody has tried yet
+would never be reached. They go to the back of the list instead of out of it:
+
+```
+5 failed in an earlier run, moved to the back of the list. --failed works through those alone.
+```
+
+So a run of twenty takes twenty fresh signals first. When the fresh ones run
+out, the failures come round again on their own.
+
+```
+py fetch_clickbox.py clickbox_worklist.csv --failed --all --auto
+```
+
+works through only the ones that failed before, which is what to run when the
+network problem behind them is fixed.
+
+A device that never answers is waited on once rather than twice, so a dead
+address costs one `--timeout` and not two. `--timeout 8` cuts it further on a
+list where many are down.
+
 `--limit` defaults to 1, so the first run of a session is one device unless you
 ask for more. `--timeout` is how long a clickbox gets to answer, 20 seconds by
 default.
