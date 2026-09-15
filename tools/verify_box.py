@@ -116,6 +116,16 @@ const out = {
     ] };
     const by = {};
     for (const u of clickboxUpdates(run, r.check, found)) by[u.id] = u;
+
+    /* the retry: the same signal goes through, and the note the failed run
+       left on it comes off, while a note a person typed stays */
+    const after = { [ids[1]]: { biu: "yes", note: "timed out", noteFrom: "clickbox" },
+                    [ids[2]]: { biu: "yes", note: "asked the district" } };
+    const retry = { schema: "maxtime-clickbox-v1", run: "y", results: [
+      { id: ids[1], exported: "files/c.cbx", error: "", skipped: "", note: "" },
+      { id: ids[2], exported: "files/d.cbx", error: "", skipped: "", note: "" },
+    ] };
+    for (const u of clickboxUpdates(retry, r.check, after)) by[u.id + " retried"] = u;
     return by;
   })(),
 };

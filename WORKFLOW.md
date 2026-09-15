@@ -180,7 +180,8 @@ the browser and survives closing the page.
 
 A clickbox that never answers is recorded with the reason and the run carries
 on; importing that run puts the reason on the row as its note and leaves the
-signal in the list. `--auto` works through the list without stopping, except at
+signal in the list, and importing a later run where it went through takes the
+note off again. `--auto` works through the list without stopping, except at
 a device whose fields already disagree with the sheets. A signal an earlier run
 already exported is skipped, so a worklist exported before that run cannot
 cause a second visit, and one that failed goes to the back of the list so it

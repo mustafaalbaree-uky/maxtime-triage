@@ -131,8 +131,12 @@ its note, so what the field used to say is not lost.
 
 A signal that did not export lands on its row as a note saying why, `the
 clickbox never answered at port 57150 (timed out)` for instance, and ticks
-nothing. It stays in the check list and in the next worklist. A note you typed
-yourself is never written over: the report says the row kept it.
+nothing. It stays in the check list and in the next worklist.
+
+Import a later run in which that signal went through and the note comes off
+again, so no row is left saying a device timed out after it did not. A note you
+typed yourself is neither written over nor removed: the report says the row
+kept it.
 
 It never ticks **moved to SharePoint**. Nothing but you moving the file can say
 that, and only that tick writes YES into the sheet's Box Verified column. A

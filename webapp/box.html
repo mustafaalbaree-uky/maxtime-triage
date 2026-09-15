@@ -727,7 +727,8 @@ function boxesToMove(check, found) {
    exported. A device that answered badly, one that timed out for instance, ties
    nothing but says so on the row, since the row is where that is looked for.
    A note a person typed is never written over: only an empty note, or one a
-   previous run wrote, gives way. */
+   previous run wrote, gives way, and a note a previous run wrote comes off
+   again when the signal goes through. */
 function clickboxUpdates(payload, check, found) {
   if (!payload || payload.schema !== "maxtime-clickbox-v1" || !Array.isArray(payload.results))
     throw new Error("Not a clickbox run file");
@@ -745,7 +746,9 @@ function clickboxUpdates(payload, check, found) {
     const mine = !S(f.note) || f.noteFrom === "clickbox";
     return { id, exported, note, skip, kind,
       addNote: !!note && note !== S(f.note) && mine,
-      keptNote: !!note && note !== S(f.note) && !mine };
+      keptNote: !!note && note !== S(f.note) && !mine,
+      /* the run before said why this one failed, and this run did not fail */
+      clearNote: kind !== "blocked" && !note && !!S(f.note) && f.noteFrom === "clickbox" };
   });
 }
 
@@ -1248,6 +1251,7 @@ function importClickboxRun(payload, label) {
     const next = { ...cur };
     if (u.kind !== "failed") next.exported = true;
     if (u.addNote) { next.note = u.note; next.noteFrom = "clickbox"; }
+    else if (u.clearNote) { delete next.note; delete next.noteFrom; }
     state.found[u.id] = next;
   }
   state.lastClickbox = { run: label, at: new Date().toISOString(),
@@ -1255,6 +1259,7 @@ function importClickboxRun(payload, label) {
     noted: updates.filter(u => u.addNote && u.kind !== "failed")
       .map(u => ({ id: u.id, note: u.note })),
     failed: pick("failed").map(u => ({ id: u.id, note: u.note, kept: u.keptNote })),
+    cleared: updates.filter(u => u.clearNote).map(u => u.id),
     blocked: updates.filter(u => u.kind === "blocked")
       .map(u => ({ id: u.id || "(no ID)", skip: u.skip })) };
   store.set("lastClickbox", state.lastClickbox);
@@ -1273,6 +1278,9 @@ function clickboxReport() {
     ${i.noted.length ? `<p><b>${i.noted.length} had something overwritten on the
       device, now on the row as a note:</b></p>
       <ul>${i.noted.map(n => `<li>${h(n.id)}: ${h(n.note)}</li>`).join("")}</ul>` : ""}
+    ${(i.cleared || []).length ? `<p>${i.cleared.length} went through this time.
+      The note an earlier run left on ${i.cleared.length === 1 ? "that row" : "those rows"}
+      is gone: ${i.cleared.map(h).join(", ")}.</p>` : ""}
     ${failed.length ? `<p class="bad"><b>${failed.length} did not export. The row
       says why and is still in the list:</b></p>
       <ul>${failed.map(n => `<li>${h(n.id)}: ${h(n.note)}${
