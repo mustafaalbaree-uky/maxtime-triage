@@ -206,11 +206,13 @@ sheet already fills is copied through untouched and is never signed, and
 neither is a blank one.
 
 A row whose Detection already says Wavetronix and which you answered **no BIU**
-on is counted separately in the bar, since the sheet and the cabinet disagree
-about whether the box question applies to it. **Export the N Wavetronix with no
-BIU** writes those rows for `fetch_clickbox.py --ping`, which says whether a
-clickbox answers at any of them. Their cells still paste `N/A` until that is
-settled.
+on does not paste `N/A`. `N/A` says the box question does not apply to that
+signal, and on a radar signal it does. Those rows paste what is known instead,
+`no BIU in module 2`, and `no BIU in module 2, nothing answered at port 57150`
+once a knock has been imported. Their Box Verified cell is left as the sheet
+has it, since whether a configuration is owed there is the part nobody has
+established. **Export the N Wavetronix with no BIU** writes those rows for
+`fetch_clickbox.py --ping`, which is what adds the second half.
 
 Where neither answer applies, a login that failed for instance, type it in the
 row's note box instead. On a row with no BIU answer, the note is what the Box

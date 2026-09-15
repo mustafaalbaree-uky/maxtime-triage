@@ -651,6 +651,9 @@ function computeColumns(result, master, meta, found) {
        rather than leaving the sheet untouched. An answer outranks the note. */
     let bf = base.boxfr, bfKind = "base";
     if (f && f.biu === "yes") { bf = "BOX"; bfKind = "field"; }
+    else if (radarUnresolved(e, f)) {
+      bf = NO_BIU_RADAR + (S(f.note) ? ", " + S(f.note) : ""); bfKind = "field";
+    }
     else if (f && f.biu === "no") { bf = "N/A"; bfKind = "field"; }
     else if (f && S(f.note)) { bf = S(f.note); bfKind = "field"; }
     else if (e.files.length && !base.boxfr) { bf = "BOX"; bfKind = "auto"; }
@@ -661,6 +664,9 @@ function computeColumns(result, master, meta, found) {
        rather than as a file that was already there. */
     let bd = base.boxdone, bdKind = "base";
     if (f && f.saved) { bd = "YES"; bdKind = "field"; }
+    /* An unresolved radar row claims nothing here. N/A would say there is
+       nothing to save, and that is the part nobody has established. */
+    else if (radarUnresolved(e, f)) { /* the sheet's own cell stands */ }
     else if (f && f.biu === "no" && !base.boxdone) { bd = "N/A"; bdKind = "field"; }
     else if (e.files.length && isExported(f)) { bd = "YES"; bdKind = "field"; }
     else if (e.files.length && !base.boxdone) { bd = AUTO_VERIFIED; bdKind = "auto"; }
@@ -732,6 +738,12 @@ function boxesToExport(check, found) {
    question applies, and no BIU says it does not. These are the rows to knock
    on before anything is written into their cells. */
 const RADAR_RE = /wavetronix|radar/i;
+/* What such a row pastes instead of N/A. N/A says the box question does not
+   apply to the signal, and on a radar signal it does. */
+const NO_BIU_RADAR = "no BIU in module 2";
+function radarUnresolved(e, f) {
+  return !!(f && f.biu === "no" && RADAR_RE.test(S(e.detection)));
+}
 function radarNoBiu(check, found) {
   return check.filter(e => {
     const f = found[S(e.id)] || {};

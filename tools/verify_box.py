@@ -136,8 +136,21 @@ const out = {
     if (!radar.length) return null;
     const id = radar[0].id, other = r.check.find(e => e.id !== id);
     const found = { [id]: { biu: "no" }, [other.id]: { biu: "yes" } };
+    const cell = (col, f) => {
+      const hit = computeColumns(r, master, meta, f)[col].find(x => x.id === id);
+      return hit ? { out: hit.out, kind: hit.kind } : null;
+    };
+    const loops = r.check.find(e => !/wavetronix|radar/i.test(String(e.detection || "")));
     return { picked: radarNoBiu(r.check, found).map(e => e.id),
-             radarInCheckList: radar.length };
+             radarInCheckList: radar.length,
+             /* no BIU on a radar signal says what is known, not N/A */
+             bare: cell("boxfr", { [id]: { biu: "no" } }),
+             knocked: cell("boxfr", { [id]: { biu: "no",
+               note: "nothing answered at port 57150", noteFrom: "clickbox" } }),
+             verified: cell("boxdone", { [id]: { biu: "no" } }),
+             /* a loops signal is untouched by any of this */
+             loopsRow: loops ? computeColumns(r, master, meta,
+               { [loops.id]: { biu: "no" } }).boxfr.find(x => x.id === loops.id).out : null };
   })(),
 
   signed: (() => {

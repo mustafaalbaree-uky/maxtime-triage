@@ -248,7 +248,9 @@ What the answers mean:
 * **some answer**: those signals do have a clickbox, and the no BIU answer on
   them is worth checking again.
 
-Decide the wording for the cell once the pattern is known, not before.
+Importing that ping run puts `nothing answered at port 57150` on each of those
+rows, and the box column then pastes `no BIU in module 2, nothing answered at
+port 57150` rather than `N/A`.
 
 ## A field the device cannot hold
 
