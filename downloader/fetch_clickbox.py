@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import socket
 import sys
 from urllib.parse import urlsplit
 
@@ -354,14 +355,29 @@ def open_properties(page, url, timeout_ms):
     return None, None, {}, {}, why
 
 
+def fit(value, field):
+    """As much of a value as the field will hold.
+
+    The Click 656 caps Location at 32 characters, and the browser cuts the rest
+    off silently as it types. Comparing what was asked for against what the
+    device shows back then reads as a device that refused the save, when it took
+    everything it had room for. Cut it here instead, so what is proposed is what
+    can actually be there.
+    """
+    n = field.get('maxlength')
+    return value[:n] if isinstance(n, int) and n > 0 else value
+
+
 def plan_row(found, row):
     """Per field: leave it, fill it, or replace what is there. Replacing is
     never decided here, only proposed."""
     out = {}
     for key in WANTED:
         current = (found[key]['value'] or '').strip()
-        want = row[key]
-        out[key] = dict(current=current, want=want,
+        full = row[key]
+        want = fit(full, found[key])
+        out[key] = dict(current=current, want=want, full=full, cut=want != full,
+                        limit=found[key].get('maxlength'),
                         action='ok' if current == want else ('fill' if not current else 'replace'))
     return out
 
@@ -393,6 +409,9 @@ def confirm(row, plan, auto=False, auto_replace=False):
         else:
             print('  !!%-10s device says %r' % (word, p['current']))
             print('  %-12s sheets say  %r' % ('', p['want']))
+        if p['cut']:
+            print('  %-12s the field holds %d characters, so %r is cut to fit'
+                  % ('', p['limit'], p['full']))
     if not replacing and not filling:
         print('  Nothing to type. Exporting only.')
     print('=' * 68)
@@ -542,6 +561,46 @@ def already_exported(out_dir):
     return run_memory(out_dir)[0]
 
 
+def knock(url, timeout):
+    """Is anything listening at the address at all.
+
+    A browser takes its full timeout to tell you a device is not there, and it
+    takes it one device at a time. Opening a socket answers the same question
+    in a fraction of a second and says which kind of nothing it is: a refusal
+    means something is there and the port is shut, silence means nothing is.
+    """
+    parts = urlsplit(url)
+    host, port = parts.hostname, parts.port or CLICKBOX_PORT
+    try:
+        socket.create_connection((host, port), timeout).close()
+        return 'answers'
+    except socket.timeout:
+        return 'silent'
+    except ConnectionRefusedError:
+        return 'refused'
+    except OSError as exc:
+        return (exc.strerror or type(exc).__name__).lower()
+
+
+def ping(rows, timeout):
+    """Knock on every address, several at once, and report."""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        states = list(pool.map(lambda r: knock(r['clickbox_url'], timeout), rows))
+    live = []
+    for row, state in zip(rows, states):
+        print('  %-6s %-10s %s' % (row['id'], state, urlsplit(row['clickbox_url']).hostname))
+        if state == 'answers':
+            live.append(row['id'])
+    print('\n%d of %d answered on port %d.' % (len(live), len(rows), CLICKBOX_PORT))
+    if live:
+        print('To work through those:\n  --only %s' % ','.join(live))
+    if len(live) < len(rows):
+        print('The rest are switched off, on a network this computer cannot see, or')
+        print('not running anything on that port. None of that is fixed by the browser.')
+    return 0
+
+
 def order_rows(rows, exported, failed):
     """The worklist as this run should work through it, and what to say about it.
 
@@ -615,6 +674,9 @@ def main():
                     help='Work through signals an earlier run already exported')
     ap.add_argument('--failed', action='store_true',
                     help='Work through only the signals an earlier run failed on')
+    ap.add_argument('--ping', action='store_true',
+                    help='Report which addresses answer on port %d, without opening '
+                         'a browser' % CLICKBOX_PORT)
     ap.add_argument('--timeout', type=float, default=20,
                     help='Seconds to wait for a clickbox to answer (default: 20)')
     group = ap.add_mutually_exclusive_group()
@@ -647,8 +709,13 @@ def main():
             print('Nothing left in this worklist. Import the runs into box.html '
                   'and export a new one.')
             return 0
-    if not args.describe and not args.all:
+    if not args.describe and not args.all and not args.ping:
         rows = rows[:max(1, args.limit)]
+
+    if args.ping:
+        print('Knocking on %d address%s. Nothing is opened and nothing is typed.'
+              % (len(rows), '' if len(rows) == 1 else 'es'))
+        return ping(rows, min(args.timeout, 5))
 
     from playwright.sync_api import sync_playwright
     run = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')

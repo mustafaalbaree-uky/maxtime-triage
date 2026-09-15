@@ -1,15 +1,16 @@
 """Synthetic-only tests: python -m unittest discover -s downloader -p test_clickbox.py."""
 import contextlib
+import socket
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 from fetch_clickbox import (FILES_SUBDIR, PROPERTIES_TAB, RUNS_SUBDIR,
-                            clickbox_origin, export_config, fill_and_save, guess,
+                            clickbox_origin, export_config, guess,
                             already_exported, confirm, nav_error, open_properties,
-                            order_rows, plan_row, read_worklist, run_memory, selector,
-                            write_results)
+                            fill_and_save, fit, knock, order_rows, plan_row,
+                            read_worklist, run_memory, selector, write_results)
 
 HEAD = 'id,clickbox_url,name,location,description\n'
 GOOD = HEAD + '4380,http://192.0.2.1:57150/,076-4380,US 25 at KY 52 (IRVING RD),KYTC D7\n'
@@ -535,6 +536,69 @@ class OrderTests(unittest.TestCase):
         got, said = self.ids({}, {r['id']: 'timed out' for r in self.ROWS})
         self.assertEqual(got, [r['id'] for r in self.ROWS])
         self.assertEqual(said, [])
+
+
+class LengthTests(unittest.TestCase):
+    """The Click 656 caps Location at 32 characters and cuts the rest off as
+    the browser types. Signal 4422, 15 Sep 2026: the device held
+    'US 127 COLLEGE ST at US 68 MOREL' and the sheets say MORELAND."""
+
+    LONG = 'US 127 COLLEGE ST at US 68 MORELAND'
+    CUT = 'US 127 COLLEGE ST at US 68 MOREL'
+
+    def plan(self, current):
+        found = {'name': field(id='deviceName', value='084-4422'),
+                 'location': field(id='deviceLocation', value=current, maxlength=32),
+                 'description': field(id='deviceDescription', value='KYTC D7')}
+        row = {'id': '4422', 'name': '084-4422', 'location': self.LONG,
+               'description': 'KYTC D7'}
+        return found, row, plan_row(found, row)
+
+    def test_a_value_is_cut_to_what_the_field_holds(self):
+        self.assertEqual(fit(self.LONG, field(maxlength=32)), self.CUT)
+
+    def test_no_limit_leaves_the_value_alone(self):
+        self.assertEqual(fit(self.LONG, field()), self.LONG)
+
+    def test_a_device_already_holding_the_cut_value_is_correct(self):
+        # It reported as a field that disagreed, then as a save the device
+        # refused. It is neither: the device is full.
+        _, _, plan = self.plan(self.CUT)
+        self.assertEqual(plan['location']['action'], 'ok')
+        self.assertTrue(plan['location']['cut'])
+
+    def test_an_empty_field_is_filled_with_the_cut_value(self):
+        _, _, plan = self.plan('')
+        self.assertEqual(plan['location']['action'], 'fill')
+        self.assertEqual(plan['location']['want'], self.CUT)
+        self.assertEqual(plan['location']['full'], self.LONG)
+
+    def test_the_read_back_agrees_with_what_was_typed(self):
+        found, _, plan = self.plan('')
+        frame = FakeFrame({'#deviceLocation': ''})
+        typed, after = fill_and_save(frame, found, plan, {'save': button('Save')})
+        self.assertEqual(after['location'], typed['location'])
+        self.assertEqual(typed['location'], self.CUT)
+
+
+class KnockTests(unittest.TestCase):
+
+    def test_a_closed_port_is_not_called_silent(self):
+        # Refused and silent are different problems: one has something there.
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+        s.close()
+        self.assertIn(knock('http://127.0.0.1:%d/' % port, 1), ('refused', 'silent'))
+
+    def test_an_open_port_answers(self):
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        s.listen(1)
+        try:
+            self.assertEqual(knock('http://127.0.0.1:%d/' % s.getsockname()[1], 2), 'answers')
+        finally:
+            s.close()
 
 
 if __name__ == '__main__':

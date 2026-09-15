@@ -184,6 +184,51 @@ A device that never answers is waited on once rather than twice, so a dead
 address costs one `--timeout` and not two. `--timeout 8` cuts it further on a
 list where many are down.
 
+## Sorting the timeouts out without a browser
+
+```
+py fetch_clickbox.py clickbox_worklist.csv --failed --ping
+```
+
+`--ping` opens a socket to each address and reports, several at a time, in a
+fraction of a second each. It opens no browser, types nothing and presses
+nothing.
+
+```
+  4002   silent     10.136.1.44
+  4041   answers    10.136.1.51
+  4118   refused    10.136.1.77
+
+1 of 3 answered on port 57150.
+To work through those:
+  --only 4041
+```
+
+* **answers**: the clickbox is there. Run it.
+* **silent**: nothing at that address, or nothing this computer can reach. The
+  device is off, the address is wrong, or the network does not carry you there.
+* **refused**: something is at that address and nothing is listening on 57150.
+  That is a live controller with no clickbox answering, which is worth knowing
+  before anybody drives out to it.
+
+Run it on the whole worklist, or on the failures alone with `--failed`.
+
+## A field the device cannot hold
+
+The Click 656 caps Location at 32 characters and cuts the rest off as the
+browser types, so a long intersection is never stored whole:
+
+```
+  Location     US 127 COLLEGE ST at US 68 MOREL
+               the field holds 32 characters, so 'US 127 COLLEGE ST at US 68 MORELAND' is cut to fit
+```
+
+The proposal is cut to what the field holds before anything is compared, so a
+device already carrying the cut value reads as correct rather than as a
+disagreement, and the read back after saving agrees with what was typed. Before
+this, signal 4422 reported a field that disagreed, then a save the device had
+refused, and exported nothing.
+
 `--limit` defaults to 1, so the first run of a session is one device unless you
 ask for more. `--timeout` is how long a clickbox gets to answer, 20 seconds by
 default.

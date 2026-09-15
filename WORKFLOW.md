@@ -185,7 +185,9 @@ note off again. `--auto` works through the list without stopping, except at
 a device whose fields already disagree with the sheets. A signal an earlier run
 already exported is skipped, so a worklist exported before that run cannot
 cause a second visit, and one that failed goes to the back of the list so it
-cannot fill a limited run. `--failed` works through those alone.
+cannot fill a limited run. `--failed` works through those alone, and
+`--ping` reports which addresses answer on port 57150 at all without opening a
+browser.
 
 A row answered **BIU, box** carries two ticks, not one: **exported off the
 device** and **moved to SharePoint**. They are separate days' work, and only the
